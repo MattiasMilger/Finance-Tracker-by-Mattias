@@ -40,10 +40,15 @@ def run_app():
     text_box = tk.Text(root, height=15, width=70, bg=ENTRY_COLOR, fg=TEXT_COLOR, state=tk.DISABLED)
     text_box.pack(pady=10)
 
+    # Configure tags for colored text
+    text_box.tag_configure("green", foreground="#00ff00")  # Green for Consider Buying
+    text_box.tag_configure("red", foreground="#ff0000")   # Red for Consider Selling
+
     def update_text_box(content):
         text_box.config(state=tk.NORMAL)
         text_box.delete(1.0, tk.END)
-        text_box.insert(tk.END, content)
+        for line, tag in content:
+            text_box.insert(tk.END, line, tag)
         text_box.config(state=tk.DISABLED)
 
     def fetch_and_display():
@@ -52,7 +57,8 @@ def run_app():
             show_message("Error", "Please enter at least one ticker.", "error")
             return
         tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
-        output = ""
+        stock_data = []  # List to store stock info dictionaries
+
         for ticker in tickers:
             try:
                 stock = yf.Ticker(ticker)
@@ -67,20 +73,54 @@ def run_app():
                     if current_price < info['fiftyDayAverage'] * 0.97:
                         recommendation = "Consider Buying"
                     elif current_price > fifty_two_week_high * 0.98:
-                        recommendation = "Consider Holding/Selling"
-                output += (
-                    f"Ticker: {ticker}\n"
-                    f"Name: {name}\n"
-                    f"Current Price: {current_price}\n"
-                    f"Previous Close: {previous_close}\n"
-                    f"52-Week High: {fifty_two_week_high}\n"
-                    f"52-Week Low: {fifty_two_week_low}\n"
-                    f"Recommendation: {recommendation}\n\n"
-                )
+                        recommendation = "Consider Selling"
+                # Store data in a dictionary
+                stock_data.append({
+                    "ticker": ticker,
+                    "name": name,
+                    "current_price": current_price,
+                    "previous_close": previous_close,
+                    "fifty_two_week_high": fifty_two_week_high,
+                    "fifty_two_week_low": fifty_two_week_low,
+                    "recommendation": recommendation
+                })
             except Exception as e:
-                output += f"Ticker: {ticker} - Failed to fetch data ({e})\n\n"
+                stock_data.append({
+                    "ticker": ticker,
+                    "name": "N/A",
+                    "current_price": None,
+                    "previous_close": None,
+                    "fifty_two_week_high": None,
+                    "fifty_two_week_low": None,
+                    "recommendation": f"Failed to fetch data ({e})"
+                })
 
-        update_text_box(output)
+        # Define recommendation priority
+        priority = {"Consider Selling": 0, "Consider Buying": 1, "Hold": 2}
+        # Sort by recommendation, using priority.get() to handle errors
+        stock_data.sort(key=lambda x: priority.get(x["recommendation"], 3))
+
+        # Format output with tags for recommendations
+        output = []
+        for data in stock_data:
+            if "Failed" in data["recommendation"]:
+                output.append((f"Ticker: {data['ticker']} - {data['recommendation']}\n\n", ""))
+            else:
+                block = (
+                    f"Ticker: {data['ticker']}\n"
+                    f"Name: {data['name']}\n"
+                    f"Current Price: {data['current_price']}\n"
+                    f"Previous Close: {data['previous_close']}\n"
+                    f"52-Week High: {data['fifty_two_week_high']}\n"
+                    f"52-Week Low: {data['fifty_two_week_low']}\n"
+                )
+                output.append((block, ""))  # Regular text, no tag
+                # Add recommendation with color tag
+                recommendation = f"Recommendation: {data['recommendation']}\n\n"
+                tag = "green" if data["recommendation"] == "Consider Buying" else "red" if data["recommendation"] == "Consider Selling" else ""
+                output.append((recommendation, tag))
+
+        update_text_box(output)  # Pass the output list directly
 
     def save_current_as_preferred():
         tickers_raw = ticker_entry.get().strip()
