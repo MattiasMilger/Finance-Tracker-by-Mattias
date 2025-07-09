@@ -26,8 +26,21 @@ def save_preferred(tickers):
 def show_message(title, message, msg_type="info"):
     getattr(messagebox, f"show{msg_type}")(title, message)
 
+def copy_to_clipboard(text_widget):
+    try:
+        content = text_widget.get("1.0", tk.END).strip()
+        if content:
+            root.clipboard_clear()
+            root.clipboard_append(content)
+            show_message("Success", "Text copied to clipboard!")
+        else:
+            show_message("Info", "No text to copy.")
+    except Exception as e:
+        show_message("Error", f"Failed to copy to clipboard: {e}", "error")
+
 # === MAIN APP LOGIC ===
 def run_app():
+    global root
     root = tk.Tk()
     root.title("Finance Tracker by Mattias")
     root.minsize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
@@ -37,8 +50,19 @@ def run_app():
     ticker_entry = tk.Entry(root, width=50, bg=ENTRY_COLOR, fg=TEXT_COLOR, insertbackground=TEXT_COLOR)
     ticker_entry.pack(pady=5)
 
-    text_box = tk.Text(root, height=15, width=70, bg=ENTRY_COLOR, fg=TEXT_COLOR, state=tk.DISABLED)
-    text_box.pack(pady=10)
+    # Create a frame for the text box and scrollbar
+    text_frame = tk.Frame(root, bg=BACKGROUND_COLOR)
+    text_frame.pack(pady=10)
+
+    # Add scrollbar
+    scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    # Configure text box with scrollbar
+    text_box = tk.Text(text_frame, height=15, width=70, bg=ENTRY_COLOR, fg=TEXT_COLOR, 
+                      state=tk.DISABLED, yscrollcommand=scrollbar.set)
+    text_box.pack(side=tk.LEFT)
+    scrollbar.config(command=text_box.yview)
 
     # Configure tags for colored text
     text_box.tag_configure("green", foreground="#00ff00")  # Green for Consider Buying
@@ -146,6 +170,7 @@ def run_app():
     tk.Button(button_frame, text="Fetch Info", command=fetch_and_display, bg=BUTTON_COLOR, fg=TEXT_COLOR, width=15).pack(side=tk.LEFT, padx=5)
     tk.Button(button_frame, text="Save Preferred", command=save_current_as_preferred, bg=BUTTON_COLOR, fg=TEXT_COLOR, width=15).pack(side=tk.LEFT, padx=5)
     tk.Button(button_frame, text="Load Preferred", command=load_preferred_tickers, bg=BUTTON_COLOR, fg=TEXT_COLOR, width=15).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Copy to Clipboard", command=lambda: copy_to_clipboard(text_box), bg=BUTTON_COLOR, fg=TEXT_COLOR, width=15).pack(side=tk.LEFT, padx=5)
     tk.Button(button_frame, text="Exit", command=root.quit, bg=BUTTON_COLOR, fg=TEXT_COLOR, width=10).pack(side=tk.LEFT, padx=5)
 
     load_preferred_tickers()  # Auto-load on startup
