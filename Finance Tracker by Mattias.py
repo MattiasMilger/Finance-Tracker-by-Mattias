@@ -20,23 +20,23 @@ CONFIG = {
     "PREFERRED_FILE": "preferred_stocks.json",
     "MAX_THREADS": 3,
     "RECOMMENDATION_THRESHOLDS": {
-        "buy_ma_ratio": 0.97,  # Price < 50-day MA * 0.97
-        "sell_high_ratio": 0.98,  # Price > 52-week high * 0.98
-        "pe_high": 30,  # High P/E threshold
-        "rsi_overbought": 70,  # RSI overbought threshold
-        "macd_buy": 0,  # MACD line > signal line for buy
-        "macd_sell": 0,  # MACD line < signal line for sell
-        "bollinger_buy": -2,  # Z-score below -2 for buy (below lower band)
-        "bollinger_sell": 2,  # Z-score above 2 for sell (above upper band)
-        "volume_spike": 2.0,  # Recent volume > 2x 20-day avg for trend confirmation
+        "buy_ma_ratio": 0.97,
+        "sell_high_ratio": 0.98,
+        "pe_high": 30,
+        "rsi_overbought": 70,
+        "macd_buy": 0,
+        "macd_sell": 0,
+        "bollinger_buy": -2,
+        "bollinger_sell": 2,
+        "volume_spike": 2.0,
     }
 }
 
 # Ticker normalization for common exchanges
 TICKER_SUFFIX_MAP = {
-    '.ST': '.STO',  # Swedish stocks (Stockholm)
-    '.MI': '.MI',   # Italian stocks (Milan)
-    '.DE': '.DE',   # German stocks (Frankfurt)
+    '.ST': '.STO',
+    '.MI': '.MI',
+    '.DE': '.DE',
 }
 
 # Setup logging
@@ -51,7 +51,7 @@ class StockTrackerApp:
         self.root.configure(bg=CONFIG["BACKGROUND_COLOR"])
         self.button_refs = {}
         self.setup_ui()
-        self.load_preferred_tickers()
+        self.load_preferred_tickers(silent=True)
 
     def setup_ui(self):
         tk.Label(self.root, text="Enter Tickers (comma-separated):", 
@@ -73,13 +73,14 @@ class StockTrackerApp:
         scrollbar.config(command=self.text_box.yview)
         self.text_box.tag_configure("green", foreground="#00ff00")
         self.text_box.tag_configure("red", foreground="#ff0000")
+        self.text_box.tag_configure("blue", foreground="#00aaff")  # NEW: sector/industry blue
 
         button_frame = tk.Frame(self.root, bg=CONFIG["BACKGROUND_COLOR"])
         button_frame.pack(pady=10)
         self.buttons = [
             ("Fetch Info", self.fetch_and_display),
             ("Save Preferred", self.save_current_as_preferred),
-            ("Load Preferred", self.load_preferred_tickers),
+            ("Load Preferred", lambda: self.load_preferred_tickers(silent=False)),
             ("Export to CSV", self.export_to_csv),
             ("Copy to Clipboard", self.copy_to_clipboard),
             ("Exit", self.root.quit)
@@ -91,7 +92,6 @@ class StockTrackerApp:
             self.button_refs[text] = button
 
     def normalize_ticker(self, ticker):
-        """Normalize ticker formats for yfinance compatibility."""
         for suffix, normalized in TICKER_SUFFIX_MAP.items():
             if ticker.endswith(suffix):
                 ticker = ticker.replace(suffix, normalized)
@@ -149,9 +149,11 @@ class StockTrackerApp:
             logging.info(f"Fetching data for ticker: {ticker}")
             stock = yf.Ticker(ticker)
             info = stock.info
-            history = stock.history(period="60d")  # Extended for MACD (26-day EMA)
+            history = stock.history(period="60d")
 
             name = info.get('shortName', 'N/A')
+            sector = info.get('sector', 'N/A')
+            industry = info.get('industry', 'N/A')
             current_price = info.get('regularMarketPrice', 
                                    info.get('currentPrice', 
                                            history['Close'].iloc[-1] if not history.empty else None))
@@ -161,7 +163,7 @@ class StockTrackerApp:
             pe_ratio = info.get('trailingPE', None)
             fifty_day_avg = info.get('fiftyDayAverage', None)
 
-            # Calculate RSI (14-day)
+            # RSI
             rsi = None
             if not history.empty and len(history) >= 14:
                 delta = history['Close'].diff()
@@ -170,12 +172,8 @@ class StockTrackerApp:
                 if not loss.empty and loss.mean() != 0:
                     rs = gain / loss
                     rsi = 100 - (100 / (1 + rs.mean()))
-                else:
-                    logging.warning(f"Cannot calculate RSI for {ticker}: loss data is empty or zero")
-            else:
-                logging.warning(f"Insufficient historical data for RSI {ticker}: {len(history)} rows")
 
-            # Calculate MACD (12-day EMA, 26-day EMA, 9-day signal line)
+            # MACD
             macd = None
             macd_signal = None
             if not history.empty and len(history) >= 26:
@@ -185,24 +183,16 @@ class StockTrackerApp:
                 macd_signal = macd.ewm(span=9, adjust=False).mean()
                 macd = macd.iloc[-1]
                 macd_signal = macd_signal.iloc[-1]
-            else:
-                logging.warning(f"Insufficient historical data for MACD {ticker}: {len(history)} rows")
 
-            # Calculate Bollinger Bands (20-day SMA, ±2 std dev)
+            # Bollinger Bands
             bollinger_z = None
             if not history.empty and len(history) >= 20:
                 sma20 = history['Close'].rolling(window=20).mean()
                 std20 = history['Close'].rolling(window=20).std()
-                upper_band = sma20 + 2 * std20
-                lower_band = sma20 - 2 * std20
                 if current_price and not pd.isna(sma20.iloc[-1]) and not pd.isna(std20.iloc[-1]):
-                    bollinger_z = (current_price - sma20.iloc[-1]) / std20.iloc[-1]  # Z-score
-                else:
-                    logging.warning(f"Cannot calculate Bollinger Bands for {ticker}: invalid SMA or std")
-            else:
-                logging.warning(f"Insufficient historical data for Bollinger Bands {ticker}: {len(history)} rows")
+                    bollinger_z = (current_price - sma20.iloc[-1]) / std20.iloc[-1]
 
-            # Calculate Volume Analysis (20-day avg vs recent volume)
+            # Volume
             avg_volume = None
             volume_ratio = None
             if not history.empty and len(history) >= 20:
@@ -210,12 +200,8 @@ class StockTrackerApp:
                 recent_volume = history['Volume'].iloc[-1]
                 if avg_volume > 0:
                     volume_ratio = recent_volume / avg_volume
-                else:
-                    logging.warning(f"Cannot calculate volume ratio for {ticker}: zero average volume")
-            else:
-                logging.warning(f"Insufficient historical data for volume {ticker}: {len(history)} rows")
 
-            # Enhanced recommendation logic
+            # Recommendation
             recommendation = "Hold"
             reasons = []
             if current_price and fifty_day_avg:
@@ -251,6 +237,8 @@ class StockTrackerApp:
             return {
                 "ticker": ticker,
                 "name": name,
+                "sector": sector,
+                "industry": industry,
                 "current_price": round(current_price, 2) if current_price else None,
                 "previous_close": round(previous_close, 2) if previous_close else None,
                 "fifty_two_week_high": round(fifty_two_week_high, 2) if fifty_two_week_high else None,
@@ -270,6 +258,8 @@ class StockTrackerApp:
             return {
                 "ticker": ticker,
                 "name": "N/A",
+                "sector": "N/A",
+                "industry": "N/A",
                 "current_price": None,
                 "previous_close": None,
                 "fifty_two_week_high": None,
@@ -320,9 +310,15 @@ class StockTrackerApp:
                         f"Volume Ratio: {data['volume_ratio']}\n"
                     )
                     output.append((block, ""))
-                    recommendation = f"Recommendation: {data['recommendation']} ({'; '.join(data['reasons'])})\n\n"
+                    recommendation = (
+                        f"Recommendation: {data['recommendation']} ({'; '.join(data['reasons'])})\n"
+                    )
                     tag = "green" if data["recommendation"] == "Consider Buying" else "red" if data["recommendation"] == "Consider Selling" else ""
                     output.append((recommendation, tag))
+
+                    # NEW: Sector & Industry always blue
+                    sector_industry = f"Sector = {data['sector']}, Industry = {data['industry']}.\n\n"
+                    output.append((sector_industry, "blue"))
 
             self.text_box.config(state=tk.NORMAL)
             self.text_box.delete(1.0, tk.END)
@@ -349,14 +345,16 @@ class StockTrackerApp:
         self.save_preferred(tickers)
         self.show_message("Saved", "Preferred tickers saved.")
 
-    def load_preferred_tickers(self):
+    def load_preferred_tickers(self, silent=False):
         tickers = self.load_preferred()
         if tickers:
             self.ticker_entry.delete(0, tk.END)
             self.ticker_entry.insert(0, ", ".join(tickers))
-            self.show_message("Loaded", "Preferred tickers loaded.")
+            if not silent:
+                self.show_message("Loaded", "Preferred tickers loaded.")
         else:
-            self.show_message("Info", "No preferred tickers found.")
+            if not silent:
+                self.show_message("Info", "No preferred tickers found.")
 
 if __name__ == "__main__":
     root = tk.Tk()
