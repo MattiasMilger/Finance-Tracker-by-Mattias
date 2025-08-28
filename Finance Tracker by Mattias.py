@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 import yfinance as yf
 import json
 import os
@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from datetime import datetime
 import logging
-import numpy as np
 
 # === CONFIGURATION CONSTANTS ===
 CONFIG = {
@@ -32,16 +31,17 @@ CONFIG = {
     }
 }
 
-# Ticker normalization for common exchanges
+# Ticker normalization
 TICKER_SUFFIX_MAP = {
     '.ST': '.STO',
     '.MI': '.MI',
     '.DE': '.DE',
 }
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, filename="stock_tracker.log", 
+# Logging
+logging.basicConfig(level=logging.INFO, filename="stock_tracker.log",
                     format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 class StockTrackerApp:
     def __init__(self, root):
@@ -54,27 +54,34 @@ class StockTrackerApp:
         self.load_preferred_tickers(silent=True)
 
     def setup_ui(self):
-        tk.Label(self.root, text="Enter Tickers (comma-separated):", 
-                bg=CONFIG["BACKGROUND_COLOR"], fg=CONFIG["TEXT_COLOR"]).pack(pady=5)
-        self.ticker_entry = tk.Entry(self.root, width=50, bg=CONFIG["ENTRY_COLOR"], 
-                                   fg=CONFIG["TEXT_COLOR"], insertbackground=CONFIG["TEXT_COLOR"])
+        tk.Label(self.root, text="Enter Tickers (comma-separated):",
+                 bg=CONFIG["BACKGROUND_COLOR"], fg=CONFIG["TEXT_COLOR"]).pack(pady=5)
+        self.ticker_entry = tk.Entry(self.root, width=50, bg=CONFIG["ENTRY_COLOR"],
+                                     fg=CONFIG["TEXT_COLOR"], insertbackground=CONFIG["TEXT_COLOR"])
         self.ticker_entry.pack(pady=5)
 
         self.status_label = tk.Label(self.root, text="", bg=CONFIG["BACKGROUND_COLOR"], fg=CONFIG["TEXT_COLOR"])
         self.status_label.pack(pady=5)
 
-        text_frame = tk.Frame(self.root, bg=CONFIG["BACKGROUND_COLOR"])
-        text_frame.pack(pady=10)
-        scrollbar = tk.Scrollbar(text_frame, orient=tk.VERTICAL)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.text_box = tk.Text(text_frame, height=15, width=70, bg=CONFIG["ENTRY_COLOR"], 
-                               fg=CONFIG["TEXT_COLOR"], state=tk.DISABLED, yscrollcommand=scrollbar.set)
-        self.text_box.pack(side=tk.LEFT)
-        scrollbar.config(command=self.text_box.yview)
-        self.text_box.tag_configure("green", foreground="#00ff00")
-        self.text_box.tag_configure("red", foreground="#ff0000")
-        self.text_box.tag_configure("blue", foreground="#00aaff")  # NEW: sector/industry blue
+        # Scrollable output frame
+        self.text_frame = tk.Frame(self.root, bg=CONFIG["BACKGROUND_COLOR"])
+        self.text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
+        self.canvas = tk.Canvas(self.text_frame, bg=CONFIG["BACKGROUND_COLOR"], highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(self.text_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg=CONFIG["BACKGROUND_COLOR"])
+
+        self.scrollable_frame.bind(
+            "<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Buttons
         button_frame = tk.Frame(self.root, bg=CONFIG["BACKGROUND_COLOR"])
         button_frame.pack(pady=10)
         self.buttons = [
@@ -82,12 +89,11 @@ class StockTrackerApp:
             ("Save Preferred", self.save_current_as_preferred),
             ("Load Preferred", lambda: self.load_preferred_tickers(silent=False)),
             ("Export to CSV", self.export_to_csv),
-            ("Copy to Clipboard", self.copy_to_clipboard),
             ("Exit", self.root.quit)
         ]
         for text, command in self.buttons:
-            button = tk.Button(button_frame, text=text, command=command, bg=CONFIG["BUTTON_COLOR"], 
-                              fg=CONFIG["TEXT_COLOR"], width=15)
+            button = tk.Button(button_frame, text=text, command=command,
+                               bg=CONFIG["BUTTON_COLOR"], fg=CONFIG["TEXT_COLOR"], width=15)
             button.pack(side=tk.LEFT, padx=5)
             self.button_refs[text] = button
 
@@ -102,10 +108,8 @@ class StockTrackerApp:
             if os.path.exists(CONFIG["PREFERRED_FILE"]):
                 with open(CONFIG["PREFERRED_FILE"], 'r') as f:
                     data = json.load(f)
-                    if not isinstance(data, list):
-                        raise ValueError("Invalid preferred stocks file format")
-                    return [str(t).upper() for t in data]
-        except (json.JSONDecodeError, ValueError) as e:
+                    return [str(t).upper() for t in data] if isinstance(data, list) else []
+        except Exception as e:
             self.show_message("Error", f"Failed to load preferred tickers: {e}", "error")
         return []
 
@@ -118,18 +122,6 @@ class StockTrackerApp:
 
     def show_message(self, title, message, msg_type="info"):
         getattr(messagebox, f"show{msg_type}")(title, message)
-
-    def copy_to_clipboard(self):
-        try:
-            content = self.text_box.get("1.0", tk.END).strip()
-            if content:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(content)
-                self.show_message("Success", "Text copied to clipboard!")
-            else:
-                self.show_message("Info", "No text to copy.")
-        except Exception as e:
-            self.show_message("Error", f"Failed to copy to clipboard: {e}", "error")
 
     def export_to_csv(self):
         if not hasattr(self, 'stock_data') or not self.stock_data:
@@ -146,7 +138,6 @@ class StockTrackerApp:
     def fetch_stock_data(self, ticker):
         try:
             ticker = self.normalize_ticker(ticker)
-            logging.info(f"Fetching data for ticker: {ticker}")
             stock = yf.Ticker(ticker)
             info = stock.info
             history = stock.history(period="60d")
@@ -154,177 +145,88 @@ class StockTrackerApp:
             name = info.get('shortName', 'N/A')
             sector = info.get('sector', 'N/A')
             industry = info.get('industry', 'N/A')
-            current_price = info.get('regularMarketPrice', 
-                                   info.get('currentPrice', 
-                                           history['Close'].iloc[-1] if not history.empty else None))
-            previous_close = info.get('previousClose', None)
-            fifty_two_week_high = info.get('fiftyTwoWeekHigh', None)
-            fifty_two_week_low = info.get('fiftyTwoWeekLow', None)
-            pe_ratio = info.get('trailingPE', None)
-            fifty_day_avg = info.get('fiftyDayAverage', None)
-
-            # RSI
-            rsi = None
-            if not history.empty and len(history) >= 14:
-                delta = history['Close'].diff()
-                gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-                loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
-                if not loss.empty and loss.mean() != 0:
-                    rs = gain / loss
-                    rsi = 100 - (100 / (1 + rs.mean()))
-
-            # MACD
-            macd = None
-            macd_signal = None
-            if not history.empty and len(history) >= 26:
-                ema12 = history['Close'].ewm(span=12, adjust=False).mean()
-                ema26 = history['Close'].ewm(span=26, adjust=False).mean()
-                macd = ema12 - ema26
-                macd_signal = macd.ewm(span=9, adjust=False).mean()
-                macd = macd.iloc[-1]
-                macd_signal = macd_signal.iloc[-1]
-
-            # Bollinger Bands
-            bollinger_z = None
-            if not history.empty and len(history) >= 20:
-                sma20 = history['Close'].rolling(window=20).mean()
-                std20 = history['Close'].rolling(window=20).std()
-                if current_price and not pd.isna(sma20.iloc[-1]) and not pd.isna(std20.iloc[-1]):
-                    bollinger_z = (current_price - sma20.iloc[-1]) / std20.iloc[-1]
-
-            # Volume
-            avg_volume = None
-            volume_ratio = None
-            if not history.empty and len(history) >= 20:
-                avg_volume = history['Volume'].rolling(window=20).mean().iloc[-1]
-                recent_volume = history['Volume'].iloc[-1]
-                if avg_volume > 0:
-                    volume_ratio = recent_volume / avg_volume
+            current_price = info.get('regularMarketPrice', None)
 
             # Recommendation
             recommendation = "Hold"
             reasons = []
-            if current_price and fifty_day_avg:
-                if current_price < fifty_day_avg * CONFIG["RECOMMENDATION_THRESHOLDS"]["buy_ma_ratio"]:
-                    recommendation = "Consider Buying"
-                    reasons.append("Price below 50-day MA")
-                elif current_price > fifty_two_week_high * CONFIG["RECOMMENDATION_THRESHOLDS"]["sell_high_ratio"]:
-                    recommendation = "Consider Selling"
-                    reasons.append("Price near 52-week high")
-            if pe_ratio and pe_ratio > CONFIG["RECOMMENDATION_THRESHOLDS"]["pe_high"]:
-                recommendation = "Consider Selling"
-                reasons.append("High P/E ratio")
-            if rsi and rsi > CONFIG["RECOMMENDATION_THRESHOLDS"]["rsi_overbought"]:
-                recommendation = "Consider Selling"
-                reasons.append("Overbought (RSI)")
-            if macd is not None and macd_signal is not None:
-                if macd > macd_signal and macd > CONFIG["RECOMMENDATION_THRESHOLDS"]["macd_buy"]:
-                    recommendation = "Consider Buying"
-                    reasons.append("Bullish MACD crossover")
-                elif macd < macd_signal and macd < CONFIG["RECOMMENDATION_THRESHOLDS"]["macd_sell"]:
-                    recommendation = "Consider Selling"
-                    reasons.append("Bearish MACD crossover")
-            if bollinger_z is not None:
-                if bollinger_z < CONFIG["RECOMMENDATION_THRESHOLDS"]["bollinger_buy"]:
-                    recommendation = "Consider Buying"
-                    reasons.append("Price below lower Bollinger Band")
-                elif bollinger_z > CONFIG["RECOMMENDATION_THRESHOLDS"]["bollinger_sell"]:
-                    recommendation = "Consider Selling"
-                    reasons.append("Price above upper Bollinger Band")
-            if volume_ratio is not None and volume_ratio > CONFIG["RECOMMENDATION_THRESHOLDS"]["volume_spike"]:
-                reasons.append(f"High volume ({volume_ratio:.2f}x average)")
+            if current_price and "fiftyDayAverage" in info and current_price < info["fiftyDayAverage"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["buy_ma_ratio"]:
+                recommendation = "Buy"
+                reasons.append("Price below 50-day MA")
+            elif current_price and "fiftyTwoWeekHigh" in info and current_price > info["fiftyTwoWeekHigh"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["sell_high_ratio"]:
+                recommendation = "Sell"
+                reasons.append("Price near 52-week high")
 
             return {
                 "ticker": ticker,
                 "name": name,
                 "sector": sector,
                 "industry": industry,
-                "current_price": round(current_price, 2) if current_price else None,
-                "previous_close": round(previous_close, 2) if previous_close else None,
-                "fifty_two_week_high": round(fifty_two_week_high, 2) if fifty_two_week_high else None,
-                "fifty_two_week_low": round(fifty_two_week_low, 2) if fifty_two_week_low else None,
-                "pe_ratio": round(pe_ratio, 2) if pe_ratio else None,
-                "rsi": round(rsi, 2) if rsi else None,
-                "macd": round(macd, 2) if macd is not None else None,
-                "macd_signal": round(macd_signal, 2) if macd_signal is not None else None,
-                "bollinger_z": round(bollinger_z, 2) if bollinger_z is not None else None,
-                "avg_volume": round(avg_volume, 0) if avg_volume else None,
-                "volume_ratio": round(volume_ratio, 2) if volume_ratio else None,
+                "info": info,
                 "recommendation": recommendation,
                 "reasons": reasons or ["No specific reason"]
             }
         except Exception as e:
             logging.error(f"Error fetching data for {ticker}: {str(e)}")
-            return {
-                "ticker": ticker,
-                "name": "N/A",
-                "sector": "N/A",
-                "industry": "N/A",
-                "current_price": None,
-                "previous_close": None,
-                "fifty_two_week_high": None,
-                "fifty_two_week_low": None,
-                "pe_ratio": None,
-                "rsi": None,
-                "macd": None,
-                "macd_signal": None,
-                "bollinger_z": None,
-                "avg_volume": None,
-                "volume_ratio": None,
-                "recommendation": f"Failed to fetch data ({str(e)})",
-                "reasons": []
-            }
+            return {"ticker": ticker, "name": "N/A", "sector": "N/A", "industry": "N/A",
+                    "info": {}, "recommendation": "Hold", "reasons": [f"Error: {e}"]}
 
     def fetch_and_display(self):
-        tickers_raw = self.ticker_entry.get().strip()
-        if not tickers_raw:
+        tickers = [t.strip().upper() for t in self.ticker_entry.get().split(",") if t.strip()]
+        if not tickers:
             self.show_message("Error", "Please enter at least one ticker.", "error")
             return
-        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
+
         self.status_label.config(text="Fetching data...")
         for button in self.button_refs.values():
             button.config(state=tk.DISABLED)
 
         def update_ui(stock_data):
             self.stock_data = stock_data
-            priority = {"Consider Selling": 0, "Consider Buying": 1, "Hold": 2}
+            priority = {"Sell": 0, "Buy": 1, "Hold": 2}
             stock_data.sort(key=lambda x: priority.get(x["recommendation"], 3))
-            output = []
+
+            for widget in self.scrollable_frame.winfo_children():
+                widget.destroy()
+
             for data in stock_data:
-                if "Failed" in data["recommendation"]:
-                    output.append((f"Ticker: {data['ticker']} - {data['recommendation']}\n\n", ""))
-                else:
-                    block = (
-                        f"Ticker: {data['ticker']}\n"
-                        f"Name: {data['name']}\n"
-                        f"Current Price: {data['current_price']}\n"
-                        f"Previous Close: {data['previous_close']}\n"
-                        f"52-Week High: {data['fifty_two_week_high']}\n"
-                        f"52-Week Low: {data['fifty_two_week_low']}\n"
-                        f"P/E Ratio: {data['pe_ratio']}\n"
-                        f"RSI (14-day): {data['rsi']}\n"
-                        f"MACD: {data['macd']}\n"
-                        f"MACD Signal: {data['macd_signal']}\n"
-                        f"Bollinger Z-Score: {data['bollinger_z']}\n"
-                        f"Avg Volume (20-day): {data['avg_volume']}\n"
-                        f"Volume Ratio: {data['volume_ratio']}\n"
-                    )
-                    output.append((block, ""))
-                    recommendation = (
-                        f"Recommendation: {data['recommendation']} ({'; '.join(data['reasons'])})\n"
-                    )
-                    tag = "green" if data["recommendation"] == "Consider Buying" else "red" if data["recommendation"] == "Consider Selling" else ""
-                    output.append((recommendation, tag))
+                block = tk.Frame(self.scrollable_frame, bg=CONFIG["BACKGROUND_COLOR"], bd=1, relief="solid", padx=5, pady=5)
+                block.pack(fill=tk.X, pady=5)
 
-                    # NEW: Sector & Industry always blue
-                    sector_industry = f"Sector = {data['sector']}, Industry = {data['industry']}.\n\n"
-                    output.append((sector_industry, "blue"))
+                rec_color = "#ff0000" if data["recommendation"] == "Sell" else "#00ff00" if data["recommendation"] == "Buy" else CONFIG["TEXT_COLOR"]
 
-            self.text_box.config(state=tk.NORMAL)
-            self.text_box.delete(1.0, tk.END)
-            for line, tag in output:
-                self.text_box.insert(tk.END, line, tag)
-            self.text_box.config(state=tk.DISABLED)
+                header = tk.Label(block, text=f"{data['ticker']} - {data['name']}\n"
+                                              f"Recommendation: {data['recommendation']}\n"
+                                              f"Sector: {data['sector']}, Industry: {data['industry']}",
+                                  fg=rec_color, bg=CONFIG["BACKGROUND_COLOR"], justify="left", anchor="w")
+                header.pack(fill=tk.X)
+
+                details_frame = tk.Frame(block, bg=CONFIG["BACKGROUND_COLOR"])
+                details_frame.pack(fill=tk.X, pady=5)
+                details_frame.pack_forget()
+
+                details_text = "Financial Indicators:\n"
+                for key in ["regularMarketPrice", "previousClose", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
+                            "trailingPE", "fiftyDayAverage"]:
+                    details_text += f"{key}: {data['info'].get(key, 'N/A')}\n"
+                details_text += f"\nReasons: {', '.join(data['reasons'])}\n"
+
+                details_label = tk.Label(details_frame, text=details_text, fg=CONFIG["TEXT_COLOR"],
+                                         bg=CONFIG["BACKGROUND_COLOR"], justify="left", anchor="w")
+                details_label.pack(fill=tk.X)
+
+                def toggle_details(frame=details_frame, btn_text="Show Details"):
+                    if frame.winfo_ismapped():
+                        frame.pack_forget()
+                        toggle_btn.config(text="Show Details")
+                    else:
+                        frame.pack(fill=tk.X, pady=5)
+                        toggle_btn.config(text="Hide Details")
+
+                toggle_btn = tk.Button(block, text="Show Details", command=toggle_details,
+                                       bg=CONFIG["BUTTON_COLOR"], fg=CONFIG["TEXT_COLOR"])
+                toggle_btn.pack()
+
             self.status_label.config(text="Data fetched successfully!")
             for button in self.button_refs.values():
                 button.config(state=tk.NORMAL)
@@ -337,11 +239,10 @@ class StockTrackerApp:
         self.root.after(0, fetch_all)
 
     def save_current_as_preferred(self):
-        tickers_raw = self.ticker_entry.get().strip()
-        if not tickers_raw:
+        tickers = [t.strip().upper() for t in self.ticker_entry.get().split(",") if t.strip()]
+        if not tickers:
             self.show_message("Error", "Please enter tickers to save.", "error")
             return
-        tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
         self.save_preferred(tickers)
         self.show_message("Saved", "Preferred tickers saved.")
 
@@ -352,9 +253,9 @@ class StockTrackerApp:
             self.ticker_entry.insert(0, ", ".join(tickers))
             if not silent:
                 self.show_message("Loaded", "Preferred tickers loaded.")
-        else:
-            if not silent:
-                self.show_message("Info", "No preferred tickers found.")
+        elif not silent:
+            self.show_message("Info", "No preferred tickers found.")
+
 
 if __name__ == "__main__":
     root = tk.Tk()
