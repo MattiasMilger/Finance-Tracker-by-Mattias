@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from datetime import datetime
 import logging
+import numpy as np  # for RSI + MACD calculations
 
 # === CONFIGURATION CONSTANTS ===
 CONFIG = {
@@ -23,11 +24,16 @@ CONFIG = {
         "sell_high_ratio": 0.98,
         "pe_high": 30,
         "rsi_overbought": 70,
+        "rsi_oversold": 30,
         "macd_buy": 0,
         "macd_sell": 0,
-        "bollinger_buy": -2,
-        "bollinger_sell": 2,
-        "volume_spike": 2.0,
+    },
+    "ENABLE_METRICS": {
+        "pe_ratio": True,
+        "revenue_growth": True,
+        "analyst_target": True,
+        "rsi": True,
+        "macd": True,
     }
 }
 
@@ -41,6 +47,57 @@ TICKER_SUFFIX_MAP = {
 # Logging
 logging.basicConfig(level=logging.INFO, filename="stock_tracker.log",
                     format="%(asctime)s - %(levelname)s - %(message)s")
+
+# === NEW METRICS ===
+def get_pe_ratio(info):
+    return info.get("trailingPE", None)
+
+def get_revenue_growth(info):
+    try:
+        rev = info.get("totalRevenue", None)
+        prev_rev = info.get("revenuePrevious", None)  # not always available
+        if rev and prev_rev:
+            return (rev - prev_rev) / prev_rev * 100
+    except Exception:
+        pass
+    return None
+
+def get_analyst_target(info, current_price):
+    target = info.get("targetMeanPrice", None)
+    if target and current_price:
+        diff = (target - current_price) / current_price * 100
+        flag = "Potential Upside" if current_price < target else None
+        return target, diff, flag
+    return None, None, None
+
+def get_rsi(history, period=14):
+    if history.empty or "Close" not in history:
+        return None, None
+    delta = history["Close"].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(window=period).mean().iloc[-1]
+    avg_loss = pd.Series(loss).rolling(window=period).mean().iloc[-1]
+    if avg_loss == 0:
+        return 100, "Overbought"
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    flag = None
+    if rsi > CONFIG["RECOMMENDATION_THRESHOLDS"]["rsi_overbought"]:
+        flag = "Overbought"
+    elif rsi < CONFIG["RECOMMENDATION_THRESHOLDS"]["rsi_oversold"]:
+        flag = "Oversold"
+    return rsi, flag
+
+def get_macd(history, short=12, long=26, signal=9):
+    if history.empty or "Close" not in history:
+        return None, None
+    close = history["Close"]
+    ema_short = close.ewm(span=short, adjust=False).mean()
+    ema_long = close.ewm(span=long, adjust=False).mean()
+    macd = ema_short - ema_long
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd.iloc[-1], signal_line.iloc[-1]
 
 
 class StockTrackerApp:
@@ -80,6 +137,14 @@ class StockTrackerApp:
 
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # === Enable scrollwheel support ===
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)      # Windows / macOS
+        self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))  # Linux scroll up
+        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))   # Linux scroll down
 
         # Buttons
         button_frame = tk.Frame(self.root, bg=CONFIG["BACKGROUND_COLOR"])
@@ -140,14 +205,14 @@ class StockTrackerApp:
             ticker = self.normalize_ticker(ticker)
             stock = yf.Ticker(ticker)
             info = stock.info
-            history = stock.history(period="60d")
+            history = stock.history(period="180d")
 
             name = info.get('shortName', 'N/A')
             sector = info.get('sector', 'N/A')
             industry = info.get('industry', 'N/A')
             current_price = info.get('regularMarketPrice', None)
 
-            # Recommendation
+            # Recommendation logic
             recommendation = "Hold"
             reasons = []
             if current_price and "fiftyDayAverage" in info and current_price < info["fiftyDayAverage"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["buy_ma_ratio"]:
@@ -157,6 +222,37 @@ class StockTrackerApp:
                 recommendation = "Sell"
                 reasons.append("Price near 52-week high")
 
+            # === NEW METRICS CALCULATION ===
+            metrics = {}
+
+            if CONFIG["ENABLE_METRICS"]["pe_ratio"]:
+                metrics["P/E Ratio"] = get_pe_ratio(info)
+
+            if CONFIG["ENABLE_METRICS"]["revenue_growth"]:
+                metrics["Revenue Growth YoY"] = get_revenue_growth(info)
+
+            if CONFIG["ENABLE_METRICS"]["analyst_target"]:
+                tgt, diff, flag = get_analyst_target(info, current_price)
+                metrics["Analyst Target"] = tgt
+                metrics["Target % Diff"] = diff
+                if flag:
+                    reasons.append(flag)
+
+            if CONFIG["ENABLE_METRICS"]["rsi"]:
+                rsi, flag = get_rsi(history)
+                metrics["RSI (14)"] = rsi
+                if flag:
+                    reasons.append(flag)
+
+            if CONFIG["ENABLE_METRICS"]["macd"]:
+                macd, signal = get_macd(history)
+                metrics["MACD"] = macd
+                metrics["MACD Signal"] = signal
+
+            # If recommendation is Hold, clear reasons
+            if recommendation == "Hold":
+                reasons = []
+
             return {
                 "ticker": ticker,
                 "name": name,
@@ -164,12 +260,13 @@ class StockTrackerApp:
                 "industry": industry,
                 "info": info,
                 "recommendation": recommendation,
-                "reasons": reasons or ["No specific reason"]
+                "reasons": reasons,
+                "metrics": metrics
             }
         except Exception as e:
             logging.error(f"Error fetching data for {ticker}: {str(e)}")
             return {"ticker": ticker, "name": "N/A", "sector": "N/A", "industry": "N/A",
-                    "info": {}, "recommendation": "Hold", "reasons": [f"Error: {e}"]}
+                    "info": {}, "recommendation": "Hold", "reasons": [], "metrics": {}}
 
     def fetch_and_display(self):
         tickers = [t.strip().upper() for t in self.ticker_entry.get().split(",") if t.strip()]
@@ -195,12 +292,18 @@ class StockTrackerApp:
 
                 rec_color = "#ff0000" if data["recommendation"] == "Sell" else "#00ff00" if data["recommendation"] == "Buy" else CONFIG["TEXT_COLOR"]
 
-                header = tk.Label(block, text=f"{data['ticker']} - {data['name']}\n"
-                                              f"Recommendation: {data['recommendation']}\n"
-                                              f"Sector: {data['sector']}, Industry: {data['industry']}",
+                # Build quick overview
+                overview_text = f"{data['ticker']} - {data['name']}\n"
+                overview_text += f"Recommendation: {data['recommendation']}\n"
+                if data["reasons"]:  # only show if not empty
+                    overview_text += f"Reasons: {', '.join(data['reasons'])}\n"
+                overview_text += f"Sector: {data['sector']}, Industry: {data['industry']}"
+
+                header = tk.Label(block, text=overview_text,
                                   fg=rec_color, bg=CONFIG["BACKGROUND_COLOR"], justify="left", anchor="w")
                 header.pack(fill=tk.X)
 
+                # Details section
                 details_frame = tk.Frame(block, bg=CONFIG["BACKGROUND_COLOR"])
                 details_frame.pack(fill=tk.X, pady=5)
                 details_frame.pack_forget()
@@ -209,13 +312,23 @@ class StockTrackerApp:
                 for key in ["regularMarketPrice", "previousClose", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
                             "trailingPE", "fiftyDayAverage"]:
                     details_text += f"{key}: {data['info'].get(key, 'N/A')}\n"
-                details_text += f"\nReasons: {', '.join(data['reasons'])}\n"
+
+                details_text += "\nExtra Metrics:\n"
+                for k, v in data["metrics"].items():
+                    if v is None:
+                        details_text += f"{k}: N/A\n"
+                    elif "Diff" in k or "Growth" in k or "RSI" in k:
+                        details_text += f"{k}: {v:.2f}%\n"
+                    elif "MACD" in k:
+                        details_text += f"{k}: {v:.2f}\n"
+                    else:
+                        details_text += f"{k}: {v}\n"
 
                 details_label = tk.Label(details_frame, text=details_text, fg=CONFIG["TEXT_COLOR"],
                                          bg=CONFIG["BACKGROUND_COLOR"], justify="left", anchor="w")
                 details_label.pack(fill=tk.X)
 
-                def toggle_details(frame=details_frame, btn_text="Show Details"):
+                def toggle_details(frame=details_frame):
                     if frame.winfo_ismapped():
                         frame.pack_forget()
                         toggle_btn.config(text="Show Details")
