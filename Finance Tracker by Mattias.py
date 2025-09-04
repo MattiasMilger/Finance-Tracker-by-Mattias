@@ -23,8 +23,10 @@ CONFIG = {
     "PREFERRED_FILE": "preferred_stocks.json",
     "MAX_THREADS": 3,
     "RECOMMENDATION_THRESHOLDS": {
-        "buy_ma_ratio": 0.97,
-        "sell_high_ratio": 0.98,
+        "buy_ma_ratio": 0.97,           # Threshold for Buy (price < 97% of 50-day MA)
+        "consider_buy_ma_ratio": 0.99,  # Threshold for Consider Buying (price < 99% of 50-day MA)
+        "sell_high_ratio": 0.98,        # Threshold for Sell (price > 98% of 52-week high)
+        "consider_sell_high_ratio": 0.95,  # Threshold for Consider Selling (price > 95% of 52-week high)
         "pe_high": 30,
         "rsi_overbought": 70,
         "rsi_oversold": 30,
@@ -279,14 +281,22 @@ class StockTrackerApp:
             recommendation = "Hold"
             reasons = []
             
-            if (current_price and "fiftyDayAverage" in info and
-                    current_price < info["fiftyDayAverage"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["buy_ma_ratio"]):
-                recommendation = "Buy"
-                reasons.append("Price below 50-day MA")
-            elif (current_price and "fiftyTwoWeekHigh" in info and
-                  current_price > info["fiftyTwoWeekHigh"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["sell_high_ratio"]):
-                recommendation = "Sell"
-                reasons.append("Price near 52-week high")
+            if current_price and "fiftyDayAverage" in info:
+                if current_price < info["fiftyDayAverage"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["buy_ma_ratio"]:
+                    recommendation = "Buy"
+                    reasons.append("Price below 50-day MA")
+                elif current_price < info["fiftyDayAverage"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["consider_buy_ma_ratio"]:
+                    recommendation = "Consider Buying"
+                    reasons.append("Price slightly below 50-day MA")
+            
+            if current_price and "fiftyTwoWeekHigh" in info:
+                if current_price > info["fiftyTwoWeekHigh"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["sell_high_ratio"]:
+                    recommendation = "Sell"
+                    reasons.append("Price near 52-week high")
+                elif (current_price > info["fiftyTwoWeekHigh"] * CONFIG["RECOMMENDATION_THRESHOLDS"]["consider_sell_high_ratio"] and
+                      recommendation == "Hold"):
+                    recommendation = "Consider Selling"
+                    reasons.append("Price approaching 52-week high")
             
             # Calculate metrics
             metrics = {}
@@ -350,8 +360,8 @@ class StockTrackerApp:
         def update_ui(stock_data: list[dict]) -> None:
             """Update UI with fetched stock data."""
             self.stock_data = stock_data
-            priority = {"Sell": 0, "Buy": 1, "Hold": 2}
-            stock_data.sort(key=lambda x: priority.get(x["recommendation"], 3))
+            priority = {"Sell": 0, "Consider Selling": 1, "Buy": 2, "Consider Buying": 3, "Hold": 4}
+            stock_data.sort(key=lambda x: priority.get(x["recommendation"], 5))
             
             for widget in self.scrollable_frame.winfo_children():
                 widget.destroy()
@@ -369,7 +379,9 @@ class StockTrackerApp:
                 
                 rec_color = (
                     "#ff0000" if data["recommendation"] == "Sell" else
+                    "#FFFF00" if data["recommendation"] == "Consider Selling" else
                     "#00ff00" if data["recommendation"] == "Buy" else
+                    "#87CEEB" if data["recommendation"] == "Consider Buying" else
                     CONFIG["TEXT_COLOR"]
                 )
                 
