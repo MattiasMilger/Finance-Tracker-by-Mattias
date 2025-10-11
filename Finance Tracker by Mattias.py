@@ -53,12 +53,6 @@ THEMES = {
         "text": "#ffffff",
         "entry": "#4a4a4a",
         "button": "#3a3a3a",
-    },
-    "light": {
-        "background": "#ffffff",
-        "text": "#000000",
-        "entry": "#e0e0e0",
-        "button": "#d0d0d0",
     }
 }
 
@@ -264,7 +258,6 @@ class StockTrackerApp:
             ("Save Preferred", self.save_current_as_preferred),
             ("Load Preferred", lambda: self.load_preferred_tickers(silent=False)),
             ("Export to CSV", lambda: export_to_csv(self.stock_data)),
-            ("Toggle Theme", self.toggle_theme),
             ("Exit", self.root.quit)
         ]
         for text, command in self.buttons:
@@ -282,28 +275,6 @@ class StockTrackerApp:
     def _on_mousewheel(self, event: tk.Event) -> None:
         self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    def toggle_theme(self):
-        current_theme = "light" if self.theme == THEMES["dark"] else "dark"
-        self.theme = THEMES[current_theme]
-        self.root.configure(bg=self.theme["background"])
-        self.update_widget_colors(self.root)
-
-    def update_widget_colors(self, widget):
-        for child in widget.winfo_children():
-            if isinstance(child, (tk.Label, tk.Frame, tk.Canvas)):
-                child.configure(bg=self.theme["background"])
-            if isinstance(child, tk.Label):
-                child.configure(fg=self.theme["text"])
-            elif isinstance(child, tk.Entry):
-                child.configure(bg=self.theme["entry"], fg=self.theme["text"], insertbackground=self.theme["text"])
-            elif isinstance(child, tk.Button):
-                child.configure(bg=self.theme["button"], fg=self.theme["text"])
-            self.update_widget_colors(child)
-        self.text_frame.configure(bg=self.theme["background"])
-        self.scrollable_frame.configure(bg=self.theme["background"])
-        self.canvas.configure(bg=self.theme["background"])
-        self.status_label.configure(bg=self.theme["background"], fg=self.theme["text"])
-
     def normalize_ticker(self, ticker: str) -> str:
         ticker = ticker.upper()
         for suffix, normalized in TICKER_SUFFIX_MAP.items():
@@ -314,13 +285,29 @@ class StockTrackerApp:
 
     def validate_tickers(self, tickers: list[str]) -> list[str]:
         valid_tickers = []
+        invalid_tickers = []
+        seen_tickers = set()
+        duplicates = []
         for ticker in tickers:
             if not ticker:
                 continue
-            if len(ticker) > 10 or not all(c.isalnum() or c in ['.', '-'] for c in ticker):
-                messagebox.showwarning("Warning", f"Invalid ticker format: {ticker}")
+            if ticker in seen_tickers:
+                duplicates.append(ticker)
+                continue
+            seen_tickers.add(ticker)
+            if len(ticker) > 10:
+                invalid_tickers.append(f"{ticker}: Too long (max 10 characters)")
+                continue
+            if not all(c.isalnum() or c in ['.', '-'] for c in ticker):
+                invalid_tickers.append(f"{ticker}: Contains invalid characters")
                 continue
             valid_tickers.append(ticker)
+        if duplicates:
+            messagebox.showwarning("Duplicate Tickers", f"Duplicate tickers removed: {', '.join(duplicates)}")
+            self.ticker_entry.delete(0, tk.END)
+            self.ticker_entry.insert(0, ", ".join(valid_tickers))
+        if invalid_tickers:
+            messagebox.showwarning("Invalid Tickers", "The following tickers are invalid:\n" + "\n".join(invalid_tickers))
         return valid_tickers
 
     def load_preferred_tickers(self, silent: bool = False) -> None:
