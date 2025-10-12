@@ -11,6 +11,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import ttk, messagebox
 import yfinance as yf
+import time
 
 # Configuration using dataclass
 from dataclasses import dataclass
@@ -78,12 +79,16 @@ TICKER_SUFFIX_MAP = {
 logging.basicConfig(
     level=logging.INFO,
     filename="stock_tracker.log",
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(funcName)s - %(message)s"
 )
 
 # Utility functions
-def handle_error(title: str, message: str, msg_type: str = "error") -> None:
-    logging.error(f"{title}: {message}")
+def handle_error(title: str, message: str, func_name: str, ticker: str = None, msg_type: str = "error") -> None:
+    log_message = f"{title}: {message}"
+    if ticker:
+        log_message += f" (Ticker: {ticker})"
+    log_message += f" in {func_name}"
+    logging.error(log_message)
     getattr(messagebox, f"show{msg_type}")(title, message)
 
 def load_preferred(preferred_file: str) -> list[str]:
@@ -93,7 +98,7 @@ def load_preferred(preferred_file: str) -> list[str]:
                 data = json.load(f)
                 return [str(t).upper() for t in data] if isinstance(data, list) else []
     except Exception as e:
-        handle_error("Load Error", f"Failed to load preferred tickers: {e}")
+        handle_error("Load Error", f"Failed to load preferred tickers: {e}", func_name="load_preferred")
     return []
 
 def save_preferred(preferred_file: str, tickers: list[str]) -> None:
@@ -101,11 +106,11 @@ def save_preferred(preferred_file: str, tickers: list[str]) -> None:
         with open(preferred_file, 'w') as f:
             json.dump(tickers, f)
     except Exception as e:
-        handle_error("Save Error", f"Failed to save preferred tickers: {e}")
+        handle_error("Save Error", f"Failed to save preferred tickers: {e}", func_name="save_preferred")
 
 def export_to_csv(stock_data: list[dict]) -> None:
     if not stock_data:
-        handle_error("Export Error", "No stock data to export.")
+        handle_error("Export Error", "No stock data to export.", func_name="export_to_csv")
         return
     try:
         flat_data = []
@@ -129,7 +134,7 @@ def export_to_csv(stock_data: list[dict]) -> None:
         df.to_csv(filename, index=False)
         messagebox.showinfo("Success", f"Data exported to {filename}")
     except Exception as e:
-        handle_error("Export Error", f"Failed to export to CSV: {e}")
+        handle_error("Export Error", f"Failed to export to CSV: {e}", func_name="export_to_csv")
 
 # Data processing functions
 def get_pe_ratio(info: dict) -> tuple[float | None, None]:
@@ -229,12 +234,10 @@ class StockTrackerApp:
             self.root,
             text="",
             bg=self.theme["background"],
-            fg=self.theme["text"]
+            fg=self.theme["text"],
+            font=("Arial", 10)
         )
         self.status_label.pack(pady=5)
-        self.progress_bar = ttk.Progressbar(self.root, mode='indeterminate')
-        self.progress_bar.pack(pady=5)
-        self.progress_bar.pack_forget()
         self.text_frame = tk.Frame(self.root, bg=self.theme["background"])
         self.text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.canvas = tk.Canvas(self.text_frame, bg=self.theme["background"], highlightthickness=0)
@@ -311,19 +314,37 @@ class StockTrackerApp:
         return valid_tickers
 
     def load_preferred_tickers(self, silent: bool = False) -> None:
-        tickers = load_preferred(CONFIG.preferred_file)
-        if tickers:
-            self.ticker_entry.delete(0, tk.END)
-            self.ticker_entry.insert(0, ", ".join(tickers))
-            if not silent:
-                messagebox.showinfo("Loaded", "Preferred tickers loaded.")
-        elif not silent:
-            messagebox.showinfo("Info", "No preferred tickers found.")
+        if not silent:
+            self.status_label.config(text="Fetching data")
+            self.root.update_idletasks()
+        def update_status(start_time: float) -> None:
+            tickers = load_preferred(CONFIG.preferred_file)
+            elapsed = (time.time() - start_time) * 1000
+            remaining = max(0, 500 - elapsed)  # Ensure at least 500ms
+            def finalize() -> None:
+                if tickers:
+                    self.ticker_entry.delete(0, tk.END)
+                    self.ticker_entry.insert(0, ", ".join(tickers))
+                    if not silent:
+                        messagebox.showinfo("Loaded", "Preferred tickers loaded.")
+                elif not silent:
+                    messagebox.showinfo("Info", "No preferred tickers found.")
+                if not silent:
+                    self.status_label.config(text="")
+                    self.root.update_idletasks()
+            self.root.after(int(remaining), finalize)
+        if not silent:
+            self.root.after(0, update_status, time.time())
+        else:
+            tickers = load_preferred(CONFIG.preferred_file)
+            if tickers:
+                self.ticker_entry.delete(0, tk.END)
+                self.ticker_entry.insert(0, ", ".join(tickers))
 
     def save_current_as_preferred(self) -> None:
         tickers = [t.strip().upper() for t in self.ticker_entry.get().split(",") if t.strip()]
         if not tickers:
-            handle_error("Save Error", "Please enter tickers to save.")
+            handle_error("Save Error", "Please enter tickers to save.", func_name="save_current_as_preferred")
             return
         save_preferred(CONFIG.preferred_file, tickers)
         messagebox.showinfo("Saved", "Preferred tickers saved.")
@@ -390,7 +411,7 @@ class StockTrackerApp:
                 "metrics": metrics
             }
         except Exception as e:
-            handle_error("Fetch Error", f"Error fetching data for {ticker}: {str(e)}")
+            handle_error("Fetch Error", f"Error fetching data for {ticker}: {str(e)}", func_name="fetch_stock_data", ticker=ticker)
             return {
                 "ticker": ticker,
                 "name": "N/A",
@@ -406,103 +427,105 @@ class StockTrackerApp:
         tickers = [t.strip().upper() for t in self.ticker_entry.get().split(",") if t.strip()]
         tickers = self.validate_tickers(tickers)
         if not tickers:
-            handle_error("Validation Error", "No valid tickers entered.")
+            handle_error("Validation Error", "No valid tickers entered.", func_name="fetch_and_display")
             return
-        self.status_label.config(text="Fetching data...")
-        self.progress_bar.pack()
-        self.progress_bar.start()
+        self.status_label.config(text="Fetching data")
+        self.root.update_idletasks()
         for button in self.button_refs.values():
             button.config(state=tk.DISABLED)
-        def update_ui(stock_data: list[dict]) -> None:
-            self.stock_data = stock_data
-            priority = {"Sell": 0, "Consider Selling": 1, "Buy": 2, "Consider Buying": 3, "Hold": 4}
-            stock_data.sort(key=lambda x: priority.get(x["recommendation"], 5))
-            for widget in self.scrollable_frame.winfo_children():
-                widget.destroy()
-            for data in stock_data:
-                block = tk.Frame(
-                    self.scrollable_frame,
-                    bg=self.theme["background"],
-                    bd=1,
-                    relief="solid",
-                    padx=5,
-                    pady=5
-                )
-                block.pack(fill=tk.X, pady=5)
-                rec_color = (
-                    "#ff0000" if data["recommendation"] == "Sell" else
-                    "#FFFF00" if data["recommendation"] == "Consider Selling" else
-                    "#00ff00" if data["recommendation"] == "Buy" else
-                    "#87CEEB" if data["recommendation"] == "Consider Buying" else
-                    self.theme["text"]
-                )
-                overview_text = f"{data['ticker']} - {data['name']}\n"
-                overview_text += f"Recommendation: {data['recommendation']}\n"
-                if data["reasons"]:
-                    overview_text += f"Reasons: {', '.join(data['reasons'])}\n"
-                overview_text += f"Sector: {data['sector']}, Industry: {data['industry']}"
-                header = tk.Label(
-                    block,
-                    text=overview_text,
-                    fg=rec_color,
-                    bg=self.theme["background"],
-                    justify="left",
-                    anchor="w"
-                )
-                header.pack(fill=tk.X)
-                details_frame = tk.Frame(block, bg=self.theme["background"])
-                details_frame.pack(fill=tk.X, pady=5)
-                details_frame.pack_forget()
-                details_text = "Financial Indicators:\n"
-                for key in [
-                    "regularMarketPrice", "previousClose", "fiftyTwoWeekHigh",
-                    "fiftyTwoWeekLow", "trailingPE", "fiftyDayAverage"
-                ]:
-                    details_text += f"{key}: {data['info'].get(key, 'N/A')}\n"
-                details_text += "\nExtra Metrics:\n"
-                for key, value in data["metrics"].items():
-                    if value is None:
-                        details_text += f"{key}: N/A\n"
-                    elif "Diff" in key or "Growth" in key:
-                        details_text += f"{key}: {value:.2f}%\n" if value is not None else f"{key}: N/A\n"
-                    elif "RSI" in key or "MACD" in key:
-                        details_text += f"{key}: {value:.2f}\n" if value is not None else f"{key}: N/A\n"
-                    else:
-                        details_text += f"{key}: {value}\n"
-                details_label = tk.Label(
-                    details_frame,
-                    text=details_text,
-                    fg=self.theme["text"],
-                    bg=self.theme["background"],
-                    justify="left",
-                    anchor="w"
-                )
-                details_label.pack(fill=tk.X)
-                def toggle_details(frame=details_frame) -> None:
-                    if frame.winfo_ismapped():
-                        frame.pack_forget()
-                        toggle_btn.config(text="Show Details")
-                    else:
-                        frame.pack(fill=tk.X, pady=5)
-                        toggle_btn.config(text="Hide Details")
-                toggle_btn = tk.Button(
-                    block,
-                    text="Show Details",
-                    command=toggle_details,
-                    bg=self.theme["button"],
-                    fg=self.theme["text"]
-                )
-                toggle_btn.pack()
-            self.status_label.config(text="Data fetched successfully!")
-            self.progress_bar.stop()
-            self.progress_bar.pack_forget()
-            for button in self.button_refs.values():
-                button.config(state=tk.NORMAL)
+        def update_status(start_time: float, stock_data: list[dict]) -> None:
+            elapsed = (time.time() - start_time) * 1000
+            remaining = max(0, 500 - elapsed)
+            def finalize() -> None:
+                self.stock_data = stock_data
+                priority = {"Sell": 0, "Consider Selling": 1, "Buy": 2, "Consider Buying": 3, "Hold": 4}
+                stock_data.sort(key=lambda x: priority.get(x["recommendation"], 5))
+                for widget in self.scrollable_frame.winfo_children():
+                    widget.destroy()
+                for data in stock_data:
+                    block = tk.Frame(
+                        self.scrollable_frame,
+                        bg=self.theme["background"],
+                        bd=1,
+                        relief="solid",
+                        padx=5,
+                        pady=5
+                    )
+                    block.pack(fill=tk.X, pady=5)
+                    rec_color = (
+                        "#ff0000" if data["recommendation"] == "Sell" else
+                        "#FFFF00" if data["recommendation"] == "Consider Selling" else
+                        "#00ff00" if data["recommendation"] == "Buy" else
+                        "#87CEEB" if data["recommendation"] == "Consider Buying" else
+                        self.theme["text"]
+                    )
+                    overview_text = f"{data['ticker']} - {data['name']}\n"
+                    overview_text += f"Recommendation: {data['recommendation']}\n"
+                    if data["reasons"]:
+                        overview_text += f"Reasons: {', '.join(data['reasons'])}\n"
+                    overview_text += f"Sector: {data['sector']}, Industry: {data['industry']}"
+                    header = tk.Label(
+                        block,
+                        text=overview_text,
+                        fg=rec_color,
+                        bg=self.theme["background"],
+                        justify="left",
+                        anchor="w"
+                    )
+                    header.pack(fill=tk.X)
+                    details_frame = tk.Frame(block, bg=self.theme["background"])
+                    details_frame.pack(fill=tk.X, pady=5)
+                    details_frame.pack_forget()
+                    details_text = "Financial Indicators:\n"
+                    for key in [
+                        "regularMarketPrice", "previousClose", "fiftyTwoWeekHigh",
+                        "fiftyTwoWeekLow", "trailingPE", "fiftyDayAverage"
+                    ]:
+                        details_text += f"{key}: {data['info'].get(key, 'N/A')}\n"
+                    details_text += "\nExtra Metrics:\n"
+                    for key, value in data["metrics"].items():
+                        if value is None:
+                            details_text += f"{key}: N/A\n"
+                        elif "Diff" in key or "Growth" in key:
+                            details_text += f"{key}: {value:.2f}%\n" if value is not None else f"{key}: N/A\n"
+                        elif "RSI" in key or "MACD" in key:
+                            details_text += f"{key}: {value:.2f}\n" if value is not None else f"{key}: N/A\n"
+                        else:
+                            details_text += f"{key}: {value}\n"
+                    details_label = tk.Label(
+                        details_frame,
+                        text=details_text,
+                        fg=self.theme["text"],
+                        bg=self.theme["background"],
+                        justify="left",
+                        anchor="w"
+                    )
+                    details_label.pack(fill=tk.X)
+                    def toggle_details(frame=details_frame) -> None:
+                        if frame.winfo_ismapped():
+                            frame.pack_forget()
+                            toggle_btn.config(text="Show Details")
+                        else:
+                            frame.pack(fill=tk.X, pady=5)
+                            toggle_btn.config(text="Hide Details")
+                    toggle_btn = tk.Button(
+                        block,
+                        text="Show Details",
+                        command=toggle_details,
+                        bg=self.theme["button"],
+                        fg=self.theme["text"]
+                    )
+                    toggle_btn.pack()
+                self.status_label.config(text="Data fetched successfully!")
+                self.root.update_idletasks()
+                for button in self.button_refs.values():
+                    button.config(state=tk.NORMAL)
+            self.root.after(int(remaining), finalize)
         def fetch_all() -> None:
             max_workers = min(len(tickers), CONFIG.max_threads)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 stock_data = list(executor.map(self.fetch_stock_data, tickers))
-            self.root.after(0, update_ui, stock_data)
+            self.root.after(0, update_status, time.time(), stock_data)
         self.root.after(0, fetch_all)
 
 if __name__ == "__main__":
