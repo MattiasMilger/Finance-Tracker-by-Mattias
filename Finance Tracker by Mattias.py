@@ -1,9 +1,8 @@
 """Stock Tracker Application using Tkinter and yFinance for real-time stock data analysis."""
-
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Tuple, Optional
 import numpy as np
@@ -24,6 +23,7 @@ class AppConfig:
     max_threads: int = 3
     recommendation_thresholds: dict = None
     enable_metrics: dict = None
+    price_swing_threshold: float = 5.0  # Threshold for price swing warning (%)
 
     def __post_init__(self):
         self.recommendation_thresholds = {
@@ -122,6 +122,7 @@ def export_to_csv(stock_data: list[dict]) -> None:
                 "industry": data["industry"],
                 "recommendation": data["recommendation"],
                 "reasons": ", ".join(data["reasons"]),
+                "price_swing_24h": data.get("price_swing_24h", "N/A"),
                 **{k: v for k, v in data["info"].items() if k in [
                     "regularMarketPrice", "previousClose", "fiftyTwoWeekHigh",
                     "fiftyTwoWeekLow", "trailingPE", "fiftyDayAverage"
@@ -190,8 +191,10 @@ def get_macd(history: pd.DataFrame, short: int = 12, long: int = 26, signal: int
 class MetricRegistry:
     def __init__(self):
         self.metrics: dict[str, Callable] = {}
+
     def register(self, name: str, func: Callable):
         self.metrics[name] = func
+
     def compute(self, name: str, *args, **kwargs) -> tuple:
         return self.metrics.get(name, lambda *a, **k: (None, None))(*args, **kwargs)
 
@@ -354,13 +357,27 @@ class StockTrackerApp:
             ticker = self.normalize_ticker(ticker)
             stock = yf.Ticker(ticker)
             info = stock.info
-            history = stock.history(period="180d")
+            # Fetch 24-hour history for price swing detection
+            history_24h = stock.history(period="1d", interval="1h")
+            history_180d = stock.history(period="180d")
             name = info.get('shortName', 'N/A')
             sector = info.get('sector', 'N/A')
             industry = info.get('industry', 'N/A')
             current_price = info.get('regularMarketPrice')
             recommendation = "Hold"
             reasons = []
+            # Calculate 24-hour price swing
+            price_swing_24h = None
+            if not history_24h.empty and "Close" in history_24h:
+                close_prices = history_24h["Close"]
+                if len(close_prices) >= 2:
+                    latest_price = close_prices.iloc[-1]
+                    earliest_price = close_prices.iloc[0]
+                    price_swing_24h = ((latest_price - earliest_price) / earliest_price) * 100
+                    if abs(price_swing_24h) >= CONFIG.price_swing_threshold:
+                        direction = "up" if price_swing_24h > 0 else "down"
+                        reasons.append(f"Warning: Significant 24h price swing: {price_swing_24h:.2f}% {direction}")
+            # Existing recommendation logic
             if current_price and "fiftyDayAverage" in info:
                 if current_price < info["fiftyDayAverage"] * CONFIG.recommendation_thresholds["buy_ma_ratio"]:
                     recommendation = "Buy"
@@ -389,12 +406,12 @@ class StockTrackerApp:
                 if flag:
                     reasons_from_metrics.append(flag)
             if CONFIG.enable_metrics["rsi"]:
-                rsi, flag = registry.compute("rsi", history)
+                rsi, flag = registry.compute("rsi", history_180d)
                 metrics["RSI (14)"] = rsi
                 if flag:
                     reasons_from_metrics.append(flag)
             if CONFIG.enable_metrics["macd"]:
-                macd, signal = registry.compute("macd", history)
+                macd, signal = registry.compute("macd", history_180d)
                 metrics["MACD"] = macd
                 metrics["MACD Signal"] = signal
             reasons += reasons_from_metrics
@@ -408,7 +425,8 @@ class StockTrackerApp:
                 "info": info,
                 "recommendation": recommendation,
                 "reasons": reasons,
-                "metrics": metrics
+                "metrics": metrics,
+                "price_swing_24h": f"{price_swing_24h:.2f}%" if price_swing_24h is not None else "N/A"
             }
         except Exception as e:
             handle_error("Fetch Error", f"Error fetching data for {ticker}: {str(e)}", func_name="fetch_stock_data", ticker=ticker)
@@ -420,7 +438,8 @@ class StockTrackerApp:
                 "info": {},
                 "recommendation": "Hold",
                 "reasons": [],
-                "metrics": {}
+                "metrics": {},
+                "price_swing_24h": "N/A"
             }
 
     def fetch_and_display(self) -> None:
@@ -461,6 +480,17 @@ class StockTrackerApp:
                     )
                     overview_text = f"{data['ticker']} - {data['name']}\n"
                     overview_text += f"Recommendation: {data['recommendation']}\n"
+                    # Only show price swing in overview if it exceeds threshold
+                    price_swing_24h = data["price_swing_24h"]
+                    show_swing_in_overview = False
+                    if price_swing_24h != "N/A":
+                        try:
+                            swing_value = float(price_swing_24h.strip("%"))
+                            if abs(swing_value) >= CONFIG.price_swing_threshold:
+                                show_swing_in_overview = True
+                                overview_text += f"Warning: 24h Price Swing: {price_swing_24h}\n"
+                        except ValueError:
+                            pass
                     if data["reasons"]:
                         overview_text += f"Reasons: {', '.join(data['reasons'])}\n"
                     overview_text += f"Sector: {data['sector']}, Industry: {data['industry']}"
@@ -482,6 +512,8 @@ class StockTrackerApp:
                         "fiftyTwoWeekLow", "trailingPE", "fiftyDayAverage"
                     ]:
                         details_text += f"{key}: {data['info'].get(key, 'N/A')}\n"
+                    # Always show price swing in details
+                    details_text += f"24h Price Swing: {price_swing_24h}\n"
                     details_text += "\nExtra Metrics:\n"
                     for key, value in data["metrics"].items():
                         if value is None:
