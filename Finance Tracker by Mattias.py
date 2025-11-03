@@ -238,6 +238,10 @@ class StockTrackerApp:
         self.current_list_name: str = ""
         self.unsaved_changes = False
 
+        # Sorting state
+        self.sort_column = None
+        self.sort_reverse = False
+
         self._setup_menu()
         self._setup_ui()
         self._load_default_list(silent=True)
@@ -305,12 +309,16 @@ class StockTrackerApp:
         tk.Button(add_f, text="Add", command=self.add_ticker_from_entry,
                   bg=self.theme["button"], fg=self.theme["text"]).pack(side=tk.LEFT, padx=5)
 
-        # Action buttons
+        # Action buttons (including Fetch & Export)
         btn_f = tk.Frame(top_f, bg=self.theme["background"])
         btn_f.pack(side=tk.RIGHT)
-        for txt, cmd in [("Remove", self.remove_selected),
-                         ("Clear All", self.clear_all)]:
-            b = tk.Button(btn_f, text=txt, command=cmd, width=10,
+        for txt, cmd in [
+            ("Remove", self.remove_selected),
+            ("Clear All", self.clear_all),
+            ("Fetch Data", self.fetch_and_display),
+            ("Export to CSV", lambda: export_to_csv(self.stock_data))
+        ]:
+            b = tk.Button(btn_f, text=txt, command=cmd, width=12,
                           bg=self.theme["button"], fg=self.theme["text"])
             b.pack(side=tk.LEFT, padx=2)
             self.button_refs[txt] = b
@@ -331,7 +339,7 @@ class StockTrackerApp:
             heading = c.replace("_", " ").title()
             if c == "1_month_%":
                 heading = f"{CONFIG.custom_period_days} Day %"
-            self.tree.heading(c, text=heading)
+            self.tree.heading(c, text=heading, anchor="center")
             self.tree.column(c, width=w, anchor="center")
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
@@ -347,16 +355,16 @@ class StockTrackerApp:
 
         self.tree.bind("<Double-1>", self.show_details_popup)
 
-        # Bottom buttons
+        # Enable sorting on column headers
+        self._setup_sorting()
+
+        # Bottom: Only Exit
         bottom = tk.Frame(self.root, bg=self.theme["background"])
         bottom.pack(pady=10)
-        for txt, cmd in [("Fetch Data", self.fetch_and_display),
-                         ("Export to CSV", lambda: export_to_csv(self.stock_data)),
-                         ("Exit", self._on_closing)]:
-            b = tk.Button(bottom, text=txt, command=cmd, width=15,
-                          bg=self.theme["button"], fg=self.theme["text"])
-            b.pack(side=tk.LEFT, padx=5)
-            self.button_refs[txt] = b
+        exit_btn = tk.Button(bottom, text="Exit", command=self._on_closing, width=15,
+                             bg=self.theme["button"], fg=self.theme["text"])
+        exit_btn.pack()
+        self.button_refs["Exit"] = exit_btn
 
         # Theme styling
         style = ttk.Style()
@@ -385,6 +393,92 @@ class StockTrackerApp:
                                    fg=self.theme["text"],
                                    font=("Arial", 10))
         self.status_lbl.pack(pady=(0, 5))
+
+    # ------------------------------------------------------------------- #
+    # Sorting
+    # ------------------------------------------------------------------- #
+    def _setup_sorting(self):
+        """Enable sorting by clicking column headers."""
+        for col in self.tree["columns"]:
+            self.tree.heading(
+                col,
+                command=lambda c=col: self._sort_by_column(c)
+            )
+
+    def _sort_by_column(self, col):
+        """Sort treeview by clicked column with proper % handling."""
+        if self.sort_column == col:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = col
+            self.sort_reverse = False
+
+        # Reset all headers
+        for c in self.tree["columns"]:
+            text = c.replace("_", " ").title()
+            if c == "1_month_%":
+                text = f"{CONFIG.custom_period_days} Day %"
+            self.tree.heading(c, text=text)
+
+        # Add arrow
+        arrow = " Down" if self.sort_reverse else " Up"
+        current_text = self.tree.heading(col)["text"].split(" ")[0]
+        self.tree.heading(col, text=current_text + arrow)
+
+        # Get items
+        items = [(self.tree.set(item, col), item) for item in self.tree.get_children()]
+
+        # === PERCENT COLUMNS ===
+        if col in ("1_day_%", "1_month_%"):
+            def parse_percent(val):
+                if val in ("", "—", "N/A"):
+                    return float('-inf') if self.sort_reverse else float('inf')
+                val = val.replace("%", "").strip()
+                try:
+                    return float(val)
+                except ValueError:
+                    return float('-inf') if self.sort_reverse else float('inf')
+            items.sort(key=lambda x: parse_percent(x[0]), reverse=self.sort_reverse)
+
+        # === PRICE ===
+        elif col == "price":
+            def parse_price(val):
+                if val in ("", "—", "N/A"):
+                    return float('-inf') if self.sort_reverse else float('inf')
+                try:
+                    return float(val)
+                except ValueError:
+                    return float('-inf') if self.sort_reverse else float('inf')
+            items.sort(key=lambda x: parse_price(x[0]), reverse=self.sort_reverse)
+
+        # === OTHER NUMERIC: P/E, RSI, MACD, Target % ===
+        elif col in ("pe", "rsi", "macd", "target_diff"):
+            def parse_float(val):
+                if val in ("", "—", "N/A"):
+                    return float('-inf') if self.sort_reverse else float('inf')
+                try:
+                    return float(val)
+                except ValueError:
+                    return float('-inf') if self.sort_reverse else float('inf')
+            items.sort(key=lambda x: parse_float(x[0]), reverse=self.sort_reverse)
+
+        # === TEXT COLUMNS ===
+        else:
+            items.sort(
+                key=lambda x: "" if x[0] in ("", "—", "N/A") else x[0].lower(),
+                reverse=self.sort_reverse
+            )
+
+        # Reorder
+        for index, (_, item) in enumerate(items):
+            self.tree.move(item, "", index)
+
+        # Re-apply color tags
+        for item in self.tree.get_children():
+            ticker = self.tree.item(item)["values"][0]
+            data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
+            if data:
+                self.tree.item(item, tags=(data["recommendation"],))
 
     # ------------------------------------------------------------------- #
     # Ticker & List Management
@@ -451,6 +545,7 @@ class StockTrackerApp:
                     "priority": 6
                 })
 
+        # Sort by recommendation priority first
         display_data.sort(key=lambda x: x["priority"])
 
         for item in display_data:
@@ -535,6 +630,7 @@ class StockTrackerApp:
                 self.tree.heading("1_month_%", text=f"{days} Day %")
                 pop.destroy()
                 messagebox.showinfo("Updated", f"Custom period set to {days} days.")
+                self.update_list_display()  # Refresh display
             except ValueError:
                 messagebox.showerror("Invalid", "Please enter a positive integer.")
 
@@ -821,7 +917,6 @@ Price: Current market price
 {CONFIG.custom_period_days} Day %: Price change over custom period
 P/E: Price-to-Earnings ratio (lower may indicate undervaluation)
 Target %: Analyst target price vs current (% difference)
- "Diff" in column)
 RSI: Relative Strength Index
   * < 30: Oversold (possible buy)
   * > 70: Overbought (possible sell)
