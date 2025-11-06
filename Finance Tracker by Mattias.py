@@ -257,11 +257,11 @@ class StockTrackerApp:
 
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New List", command=self.new_list)
-        file_menu.add_command(label="Save List", command=self.save_current_list)
-        file_menu.add_command(label="Save List As...", command=self.save_list_as)
+        file_menu.add_command(label="New", command=self.new_list)
+        file_menu.add_command(label="Open", command=self.open_dialog)
         file_menu.add_separator()
-        file_menu.add_command(label="Load List...", command=self.load_list_dialog)
+        file_menu.add_command(label="Save", command=self.save_current_list)
+        file_menu.add_command(label="Save as", command=self.save_list_as)
         file_menu.add_separator()
         file_menu.add_command(label="Set as Default", command=self.set_as_default)
         file_menu.add_command(label="Remove Default", command=self.remove_default)
@@ -307,28 +307,28 @@ class StockTrackerApp:
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
 
-        # Central action buttons (Fetch Data made prominent)
+        # Central action buttons
         action_frame = tk.Frame(top_frame, bg=self.theme["background"])
         action_frame.pack(expand=True)
 
-        # Left side actions
+        # Left side: Remove + Clear All (closer to Add)
         left_actions = tk.Frame(action_frame, bg=self.theme["background"])
-        left_actions.pack(side=tk.LEFT, padx=40)
+        left_actions.pack(side=tk.LEFT, padx=20)
         for txt, cmd in [("Remove", self.remove_selected), ("Clear All", self.clear_all)]:
             btn = tk.Button(left_actions, text=txt, command=cmd, width=12,
                             bg=self.theme["button"], fg=self.theme["text"])
             btn.pack(side=tk.LEFT, padx=2)
             self.button_refs[txt] = btn
 
-        # Central Fetch Data button - back to theme color, bold
+        # Center: Fetch Data (prominent)
         fetch_btn = tk.Button(
             action_frame, text="Fetch Data", command=self.fetch_and_display,
             bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
         )
-        fetch_btn.pack(side=tk.LEFT, padx=15)
+        fetch_btn.pack(side=tk.LEFT, padx=40)
         self.button_refs["Fetch Data"] = fetch_btn
 
-        # Right side actions
+        # Right side: Export to CSV
         right_actions = tk.Frame(action_frame, bg=self.theme["background"])
         right_actions.pack(side=tk.LEFT)
         export_btn = tk.Button(
@@ -413,7 +413,6 @@ class StockTrackerApp:
     def _setup_sorting(self) -> None:
         for col in self.tree["columns"]:
             self.tree.heading(col, command=lambda c=col: self._sort_by_column(c))
-        # Initialize sort indicators (no text, just arrows)
         self._update_sort_indicator()
 
     def _update_sort_indicator(self) -> None:
@@ -422,7 +421,7 @@ class StockTrackerApp:
             if col == "1_month_%":
                 base_text = f"{CONFIG.custom_period_days} Day %"
             if col == self._sort_column:
-                arrow = "Up" if not self._sort_reverse else "Down"
+                arrow = "Down" if self._sort_reverse else "Up"
                 self.tree.heading(col, text=base_text + " " + arrow)
             else:
                 self.tree.heading(col, text=base_text)
@@ -603,12 +602,16 @@ class StockTrackerApp:
                 days = int(entry.get())
                 if days <= 0:
                     raise ValueError
+                old_days = CONFIG.custom_period_days
                 CONFIG.custom_period_days = days
                 self.tree.heading("1_month_%", text=f"{days} Day %")
                 self._update_sort_indicator()
                 pop.destroy()
                 messagebox.showinfo("Updated", f"Custom period set to {days} days.")
-                self._update_list_display()
+                if self.stock_data:
+                    self.fetch_and_display()
+                else:
+                    self._update_list_display()
             except ValueError:
                 messagebox.showerror("Invalid", "Please enter a positive integer.")
 
@@ -646,7 +649,7 @@ class StockTrackerApp:
             self.update_list_name()
             self.unsaved_changes = False
 
-    def load_list_dialog(self) -> None:
+    def open_dialog(self) -> None:
         if self.unsaved_changes and messagebox.askyesnocancel("Unsaved Changes", "Save current list before loading?"):
             self.save_current_list()
         fn = filedialog.askopenfilename(
@@ -878,7 +881,7 @@ MACD: Moving Average Convergence Divergence
 Recommendation Logic:
 * Buy: Price < 97% of 50-day MA
 * Consider Buying: Price < 99% of 50-day MA
-* Sell: Price > 98% of 52-week high
+* Sell: Price > 98 lumine% of 52-week high
 * Consider Selling: Price > 95% of 52-week high
 * Hold: No strong signals
 
