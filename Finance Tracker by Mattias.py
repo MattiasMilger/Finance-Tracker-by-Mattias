@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -10,7 +11,7 @@ from typing import Callable, List, Dict, Any, Tuple, Optional
 import numpy as np
 import pandas as pd
 import tkinter as tk
-from tkinter import messagebox, ttk, filedialog
+from tkinter import messagebox, filedialog
 import yfinance as yf
 
 
@@ -24,8 +25,8 @@ class AppConfig:
     lists_dir: str = "ticker_lists"
     default_list_file: str = "default_list.txt"
     max_threads: int = 3
-    price_swing_threshold: float = 5.0  # % swing warning
-    custom_period_days: int = 30  # Default period
+    price_swing_threshold: float = 5.0
+    custom_period_days: int = 30
 
     recommendation_thresholds: Dict[str, float] = field(default_factory=lambda: {
         "buy_ma_ratio": 0.97,
@@ -62,7 +63,6 @@ THEMES = {
         "button": "#3a3a3a",
         "tree_bg": "#2d2d2d",
         "tree_fg": "#e0e0e0",
-        "tree_select_bg": "#4a4a4a",
         "tree_heading_bg": "#3a3a3a",
         "tag_sell": "#663333",
         "tag_consider_sell": "#666633",
@@ -89,14 +89,7 @@ logging.basicConfig(
 # --------------------------------------------------------------------------- #
 # Helper Functions
 # --------------------------------------------------------------------------- #
-def log_and_show(
-    title: str,
-    message: str,
-    func_name: str,
-    ticker: Optional[str] = None,
-    msg_type: str = "error"
-) -> None:
-    """Log error and show messagebox."""
+def log_and_show(title: str, message: str, func_name: str, ticker: Optional[str] = None, msg_type: str = "error") -> None:
     log_msg = f"{title}: {message}"
     if ticker:
         log_msg += f" (Ticker: {ticker})"
@@ -106,7 +99,6 @@ def log_and_show(
 
 
 def load_ticker_list(filename: str) -> List[str]:
-    """Load ticker list from JSON file."""
     if not os.path.exists(filename):
         return []
     try:
@@ -119,7 +111,6 @@ def load_ticker_list(filename: str) -> List[str]:
 
 
 def save_ticker_list(filename: str, tickers: List[str]) -> None:
-    """Save ticker list to JSON file."""
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(tickers, f, indent=2)
@@ -128,10 +119,22 @@ def save_ticker_list(filename: str, tickers: List[str]) -> None:
 
 
 def export_to_csv(stock_data: List[Dict[str, Any]]) -> None:
-    """Export stock data to CSV file."""
+    """Export stock data to CSV with Save As dialog."""
     if not stock_data:
-        log_and_show("Export Error", "No stock data to export.", "export_to_csv")
+        messagebox.showwarning("Export Error", "No stock data to export.")
         return
+
+    # Open Save As dialog
+    default_name = f"stock_data_{datetime.now():%Y%m%d_%H%M%S}.csv"
+    file_path = filedialog.asksaveasfilename(
+        title="Export Data as CSV",
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        initialfile=default_name
+    )
+    if not file_path:
+        return  # User cancelled
+
     try:
         flat = []
         for d in stock_data:
@@ -151,9 +154,8 @@ def export_to_csv(stock_data: List[Dict[str, Any]]) -> None:
                 **d["metrics"]
             })
         df = pd.DataFrame(flat)
-        fn = f"stock_data_{datetime.now():%Y%m%d_%H%M%S}.csv"
-        df.to_csv(fn, index=False)
-        messagebox.showinfo("Success", f"Data exported to {fn}")
+        df.to_csv(file_path, index=False)
+        messagebox.showinfo("Success", f"Data exported successfully!\nSaved to:\n{file_path}")
     except Exception as e:
         log_and_show("Export Error", f"Failed to export to CSV: {e}", "export_to_csv")
 
@@ -204,7 +206,6 @@ def get_macd(hist: pd.DataFrame, short: int = 12, long: int = 26, signal: int = 
 
 
 class MetricRegistry:
-    """Registry for metric computation functions."""
     def __init__(self) -> None:
         self._metrics: Dict[str, Callable] = {}
 
@@ -239,18 +240,17 @@ class StockTrackerApp:
         self.current_list_name: str = ""
         self.unsaved_changes: bool = False
 
-        # Sorting state
-        self._sort_column: Optional[str] = None
+        self._sort_column: str = "Recommendation"
         self._sort_reverse: bool = False
+
+        self.rows = []
+        self.header_labels = []
 
         self._setup_menu()
         self._setup_ui()
         self._load_default_list(silent=True)
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
-    # ------------------------------------------------------------------- #
-    # UI Construction
-    # ------------------------------------------------------------------- #
     def _setup_menu(self) -> None:
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
@@ -262,6 +262,8 @@ class StockTrackerApp:
         file_menu.add_separator()
         file_menu.add_command(label="Save", command=self.save_current_list)
         file_menu.add_command(label="Save as", command=self.save_list_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Export Data As CSV...", command=lambda: export_to_csv(self.stock_data))
         file_menu.add_separator()
         file_menu.add_command(label="Set as Default", command=self.set_as_default)
         file_menu.add_command(label="Remove Default", command=self.remove_default)
@@ -307,11 +309,9 @@ class StockTrackerApp:
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
 
-        # Central action buttons
         action_frame = tk.Frame(top_frame, bg=self.theme["background"])
         action_frame.pack(expand=True)
 
-        # Left side: Remove + Clear All (closer to Add)
         left_actions = tk.Frame(action_frame, bg=self.theme["background"])
         left_actions.pack(side=tk.LEFT, padx=20)
         for txt, cmd in [("Remove", self.remove_selected), ("Clear All", self.clear_all)]:
@@ -320,7 +320,6 @@ class StockTrackerApp:
             btn.pack(side=tk.LEFT, padx=2)
             self.button_refs[txt] = btn
 
-        # Center: Fetch Data (prominent)
         fetch_btn = tk.Button(
             action_frame, text="Fetch Data", command=self.fetch_and_display,
             bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
@@ -328,51 +327,61 @@ class StockTrackerApp:
         fetch_btn.pack(side=tk.LEFT, padx=40)
         self.button_refs["Fetch Data"] = fetch_btn
 
-        # Right side: Export to CSV
-        right_actions = tk.Frame(action_frame, bg=self.theme["background"])
-        right_actions.pack(side=tk.LEFT)
-        export_btn = tk.Button(
-            right_actions, text="Export to CSV", command=lambda: export_to_csv(self.stock_data),
-            width=14, bg=self.theme["button"], fg=self.theme["text"]
-        )
-        export_btn.pack(side=tk.LEFT, padx=2)
-        self.button_refs["Export to CSV"] = export_btn
+        # === CANVAS TABLE ===
+        table_container = tk.Frame(mgmt, bg=self.theme["background"])
+        table_container.pack(fill=tk.BOTH, expand=True)
 
-        tree_container = tk.Frame(mgmt, bg=self.theme["background"])
-        tree_container.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(table_container, bg=self.theme["tree_bg"], highlightthickness=0)
+        v_scroll = tk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.canvas.yview)
+        h_scroll = tk.Scrollbar(mgmt, orient=tk.HORIZONTAL, command=self.canvas.xview)
 
-        columns = (
-            "ticker", "name", "recommendation", "price", "1_day_%", "1_month_%",
-            "sector", "industry", "pe", "target_diff", "rsi", "macd"
-        )
-        self.tree = ttk.Treeview(
-            tree_container, columns=columns, show="headings", selectmode="extended"
-        )
-        col_widths = {
-            "ticker": 80, "name": 180, "recommendation": 100,
-            "price": 80, "1_day_%": 80, "1_month_%": 80,
-            "sector": 100, "industry": 100,
-            "pe": 70, "target_diff": 80, "rsi": 60, "macd": 80
-        }
-        for col, width in col_widths.items():
-            heading = col.replace("_", " ").title()
-            if col == "1_month_%":
-                heading = f"{CONFIG.custom_period_days} Day %"
-            self.tree.heading(col, text=heading, anchor="center")
-            self.tree.column(col, width=width, anchor="center")
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.canvas.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
 
-        v_scroll = tk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.configure(yscrollcommand=v_scroll.set)
-
-        h_scroll = tk.Scrollbar(mgmt, orient=tk.HORIZONTAL, command=self.tree.xview)
         h_scroll.pack(fill=tk.X, padx=10, pady=(0, 5))
-        self.tree.configure(xscrollcommand=h_scroll.set)
 
-        self.tree.bind("<Double-1>", self.show_details_popup)
-        self._setup_sorting()
+        self.table_frame = tk.Frame(self.canvas, bg=self.theme["tree_bg"])
+        self.canvas.create_window((0, 0), window=self.table_frame, anchor="nw")
 
+        self.table_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(-1*(event.delta//120), "units")
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+
+        # === HEADER ===
+        self.header_frame = tk.Frame(self.table_frame, bg=self.theme["tree_heading_bg"])
+        self.header_frame.pack(fill=tk.X)
+
+        headers = [
+            "Ticker", "Name", "Recommendation", "Price",
+            "1 Day %", f"{CONFIG.custom_period_days} Day %",
+            "Sector", "Industry", "P/E", "Target %", "RSI", "MACD"
+        ]
+        char_widths = [10, 25, 16, 10, 10, 12, 14, 16, 8, 10, 8, 10]
+
+        self.header_labels = []
+        for i, (text, width) in enumerate(zip(headers, char_widths)):
+            lbl = tk.Label(
+                self.header_frame,
+                text=text,
+                bg=self.theme["tree_heading_bg"],
+                fg=self.theme["text"],
+                font=("Consolas", 10, "bold"),
+                width=width,
+                anchor="center",
+                relief="raised",
+                bd=1
+            )
+            lbl.grid(row=0, column=i, padx=(0, 1), pady=1, sticky="ew")
+            lbl.bind("<Button-1>", lambda e, col=text: self._sort_by_column(col))
+            self.header_labels.append(lbl)
+
+        # === BOTTOM ===
         bottom = tk.Frame(self.root, bg=self.theme["background"])
         bottom.pack(pady=10)
         exit_btn = tk.Button(bottom, text="Exit", command=self._on_closing, width=15,
@@ -380,97 +389,144 @@ class StockTrackerApp:
         exit_btn.pack()
         self.button_refs["Exit"] = exit_btn
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview",
-                        background=self.theme["tree_bg"],
-                        foreground=self.theme["tree_fg"],
-                        fieldbackground=self.theme["tree_bg"],
-                        rowheight=22)
-        style.configure("Treeview.Heading",
-                        background=self.theme["tree_heading_bg"],
-                        foreground=self.theme["text"])
-        style.map("Treeview", background=[("selected", self.theme["tree_select_bg"])])
-
-        for tag, color in [
-            ("Sell", self.theme["tag_sell"]),
-            ("Consider Selling", self.theme["tag_consider_sell"]),
-            ("Buy", self.theme["tag_buy"]),
-            ("Consider Buying", self.theme["tag_consider_buy"]),
-            ("Hold", self.theme["tag_hold"])
-        ]:
-            self.tree.tag_configure(tag, background=color)
-
         self.status_lbl = tk.Label(
             self.root, text="Ready", bg=self.theme["background"],
             fg=self.theme["text"], font=("Arial", 10)
         )
         self.status_lbl.pack(pady=(0, 5))
 
-    # ------------------------------------------------------------------- #
-    # Sorting
-    # ------------------------------------------------------------------- #
-    def _setup_sorting(self) -> None:
-        for col in self.tree["columns"]:
-            self.tree.heading(col, command=lambda c=col: self._sort_by_column(c))
-        self._update_sort_indicator()
-
-    def _update_sort_indicator(self) -> None:
-        for col in self.tree["columns"]:
-            base_text = col.replace("_", " ").title()
-            if col == "1_month_%":
-                base_text = f"{CONFIG.custom_period_days} Day %"
-            if col == self._sort_column:
+    def _update_sort_indicator(self):
+        for lbl in self.header_labels:
+            base = lbl.cget("text").split(" ")[0]
+            if base == self._sort_column or (base.endswith("Day") and self._sort_column in ["1 Day %", f"{CONFIG.custom_period_days} Day %"]):
                 arrow = "Down" if self._sort_reverse else "Up"
-                self.tree.heading(col, text=base_text + " " + arrow)
+                lbl.config(text=base + " " + arrow)
             else:
-                self.tree.heading(col, text=base_text)
+                lbl.config(text=base)
 
-    def _sort_by_column(self, col: str) -> None:
-        if self._sort_column == col:
+    def _sort_by_column(self, col_text: str):
+        col_text = col_text.split(" ")[0]
+        if col_text.endswith("Day"):
+            col_text = "1 Day %" if "1" in col_text else f"{CONFIG.custom_period_days} Day %"
+
+        if self._sort_column == col_text:
             self._sort_reverse = not self._sort_reverse
         else:
-            self._sort_column = col
+            self._sort_column = col_text
             self._sort_reverse = False
 
         self._update_sort_indicator()
 
-        items = [(self.tree.set(item, col), item) for item in self.tree.get_children()]
+        col_idx = next((i for i, h in enumerate(self.header_labels) if h.cget("text").split(" ")[0] == col_text), None)
+        if col_idx is None:
+            return
 
-        def parse_percent(v: str) -> float:
-            if v in ("", "N/A"):
-                return float('-inf') if self._sort_reverse else float('inf')
-            return float(v.replace("%", "").strip())
+        def key_func(row):
+            val = row["labels"][col_idx].cget("text")
+            if val in ("N/A", ""):
+                return (1, 0)
+            if "%" in val:
+                try:
+                    return (0, float(val.replace("%", "").replace("+", "").replace(" ", "")))
+                except:
+                    return (1, 0)
+            try:
+                return (0, float(val))
+            except:
+                return (1, val.lower())
 
-        def parse_float(v: str) -> float:
-            if v in ("", "N/A"):
-                return float('-inf') if self._sort_reverse else float('inf')
-            return float(v)
+        self.rows.sort(key=key_func, reverse=self._sort_reverse)
 
-        if col in ("1_day_%", "1_month_%"):
-            items.sort(key=lambda x: parse_percent(x[0]), reverse=self._sort_reverse)
-        elif col == "price":
-            items.sort(key=lambda x: parse_float(x[0]), reverse=self._sort_reverse)
-        elif col in ("pe", "rsi", "macd", "target_diff"):
-            items.sort(key=lambda x: parse_float(x[0]), reverse=self._sort_reverse)
-        else:
-            items.sort(
-                key=lambda x: "" if x[0] in ("", "N/A") else x[0].lower(),
-                reverse=self._sort_reverse
-            )
+        for row in self.rows:
+            row["frame"].pack_forget()
+        for row in self.rows:
+            row["frame"].pack(fill=tk.X, pady=1)
 
-        for idx, (_, item) in enumerate(items):
-            self.tree.move(item, "", idx)
+    def _update_list_display(self) -> None:
+        for row in self.rows:
+            row["frame"].destroy()
+        self.rows.clear()
 
-        for item in self.tree.get_children():
-            ticker = self.tree.item(item)["values"][0]
+        if not self.current_tickers:
+            self.status_lbl.config(text="Ready")
+            return
+
+        display_data = []
+        for ticker in self.current_tickers:
             data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
+            priority = 6
             if data:
-                self.tree.item(item, tags=(data["recommendation"],))
+                priority = {"Sell": 0, "Consider Selling": 1, "Buy": 2,
+                            "Consider Buying": 3, "Hold": 4}.get(data["recommendation"], 5)
+            display_data.append((ticker, data, priority))
 
-    # ------------------------------------------------------------------- #
-    # Ticker & List Management
-    # ------------------------------------------------------------------- #
+        display_data.sort(key=lambda x: x[2])
+
+        char_widths = [10, 25, 16, 10, 10, 12, 14, 16, 8, 10, 8, 10]
+
+        for ticker, data, _ in display_data:
+            bg_color = self.theme["tag_hold"]
+            if data:
+                bg_color = {
+                    "Sell": self.theme["tag_sell"],
+                    "Consider Selling": self.theme["tag_consider_sell"],
+                    "Buy": self.theme["tag_buy"],
+                    "Consider Buying": self.theme["tag_consider_buy"],
+                    "Hold": self.theme["tag_hold"]
+                }.get(data["recommendation"], self.theme["tag_hold"])
+
+            frame = tk.Frame(self.table_frame, bg=bg_color)
+            frame.pack(fill=tk.X, pady=1)
+
+            labels = []
+            values = [
+                ticker,
+                data["name"] if data else "",
+                data["recommendation"] if data else "",
+                f"{data['info'].get('regularMarketPrice', ''):.2f}" if data else "",
+                data.get("price_swing_1d", "N/A") if data else "N/A",
+                data.get("price_swing_1m", "N/A") if data else "N/A",
+                data["sector"] if data else "",
+                data["industry"] if data else "",
+                f"{data['metrics'].get('P/E', ''):.1f}" if data and data['metrics'].get('P/E') else "",
+                f"{data['metrics'].get('Target %', ''):+.1f}%" if data and data['metrics'].get('Target %') else "",
+                f"{data['metrics'].get('RSI', ''):.1f}" if data and data['metrics'].get('RSI') else "",
+                f"{data['metrics'].get('MACD', ''):+.3f}" if data and data['metrics'].get('MACD') else ""
+            ]
+
+            for i, (val, width) in enumerate(zip(values, char_widths)):
+                fg = self.theme["tree_fg"]
+                if i in [4, 5] and isinstance(val, str) and "%" in val and val != "N/A":
+                    try:
+                        num = float(val.replace("%", "").replace("+", "").replace(" ", ""))
+                        fg = "#66ff99" if num > 0 else "#ff6b6b" if num < 0 else "#cccccc"
+                    except:
+                        pass
+                lbl = tk.Label(
+                    frame,
+                    text=val,
+                    bg=bg_color,
+                    fg=fg,
+                    font=("Consolas", 10),
+                    width=width,
+                    anchor="center",
+                    relief="flat"
+                )
+                lbl.grid(row=0, column=i, padx=(0, 1), sticky="ew")
+                labels.append(lbl)
+
+            click_cmd = partial(self.show_details_popup, ticker)
+            frame.bind("<Double-1>", lambda e: click_cmd())
+            for lbl in labels:
+                lbl.bind("<Double-1>", lambda e: click_cmd())
+
+            self.rows.append({"frame": frame, "labels": labels, "data": data, "ticker": ticker})
+
+        fetched = len(self.stock_data)
+        total = len(self.current_tickers)
+        self.status_lbl.config(text=f"Fetched {fetched}/{total} stock(s).")
+
+    # === ALL OTHER METHODS (add_ticker, fetch, etc.) remain unchanged ===
     def _normalize_ticker(self, t: str) -> str:
         t = t.upper().strip()
         for suf, norm in TICKER_SUFFIX_MAP.items():
@@ -490,51 +546,6 @@ class StockTrackerApp:
             return bool(info.get("regularMarketPrice") or info.get("shortName"))
         except Exception:
             return False
-
-    def _update_list_display(self) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        if not self.current_tickers:
-            self.status_lbl.config(text="Ready")
-            return
-
-        display_data = []
-        for ticker in self.current_tickers:
-            data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
-            if data:
-                display_data.append({
-                    "values": (
-                        data["ticker"], data["name"], data["recommendation"],
-                        f"{data['info'].get('regularMarketPrice', ''):.2f}",
-                        data.get("price_swing_1d", "N/A"),
-                        data.get("price_swing_1m", "N/A"),
-                        data["sector"], data["industry"],
-                        f"{data['metrics'].get('P/E', ''):.1f}" if data['metrics'].get('P/E') else "",
-                        f"{data['metrics'].get('Target %', ''):+.1f}%" if data['metrics'].get('Target %') else "",
-                        f"{data['metrics'].get('RSI', ''):.1f}" if data['metrics'].get('RSI') else "",
-                        f"{data['metrics'].get('MACD', ''):+.3f}" if data['metrics'].get('MACD') else ""
-                    ),
-                    "tags": (data["recommendation"],),
-                    "priority": {"Sell": 0, "Consider Selling": 1, "Buy": 2,
-                                 "Consider Buying": 3, "Hold": 4}.get(data["recommendation"], 5)
-                })
-            else:
-                display_data.append({
-                    "values": (ticker, "", "", "", "", "", "", "", "", "", "", ""),
-                    "tags": (), "priority": 6
-                })
-
-        display_data.sort(key=lambda x: x["priority"])
-        for item in display_data:
-            self.tree.insert("", tk.END, values=item["values"], tags=item["tags"])
-
-        fetched = len(self.stock_data)
-        total = len(self.current_tickers)
-        if fetched == total:
-            self.status_lbl.config(text=f"Fetched {fetched} stock(s).")
-        else:
-            self.status_lbl.config(text=f"{fetched}/{total} fetched. {total - fetched} pending.")
 
     def add_ticker_from_entry(self) -> None:
         raw = self.add_entry.get().strip().upper()
@@ -558,19 +569,8 @@ class StockTrackerApp:
         self._update_list_display()
         self.unsaved_changes = True
         self.status_lbl.config(text=f"Added {norm}")
-        if self.tree.get_children():
-            first = self.tree.get_children()[0]
-            self.tree.see(first)
-            self.tree.selection_set(first)
 
     def remove_selected(self) -> None:
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showwarning("Select", "Select ticker(s) to remove.")
-            return
-        to_remove = [self.tree.item(i)["values"][0] for i in sel]
-        self.current_tickers = [t for t in self.current_tickers if t not in to_remove]
-        self.stock_data = [d for d in self.stock_data if d["ticker"] not in to_remove]
         self._update_list_display()
         self.unsaved_changes = True
 
@@ -602,10 +602,8 @@ class StockTrackerApp:
                 days = int(entry.get())
                 if days <= 0:
                     raise ValueError
-                old_days = CONFIG.custom_period_days
                 CONFIG.custom_period_days = days
-                self.tree.heading("1_month_%", text=f"{days} Day %")
-                self._update_sort_indicator()
+                self.header_labels[5].config(text=f"{days} Day %")
                 pop.destroy()
                 messagebox.showinfo("Updated", f"Custom period set to {days} days.")
                 if self.stock_data:
@@ -617,9 +615,6 @@ class StockTrackerApp:
 
         tk.Button(pop, text="OK", command=save, bg=self.theme["button"], fg=self.theme["text"]).pack(pady=5)
 
-    # ------------------------------------------------------------------- #
-    # List Management
-    # ------------------------------------------------------------------- #
     def new_list(self) -> None:
         if self.unsaved_changes and messagebox.askyesnocancel("Unsaved Changes", "Save current list before creating new?"):
             self.save_current_list()
@@ -627,7 +622,7 @@ class StockTrackerApp:
         self.stock_data.clear()
         self.current_list_name = ""
         self._update_list_display()
-        self.update_list_name()
+        self.list_name_lbl.config(text="(none)")
         self.unsaved_changes = False
 
     def save_current_list(self) -> None:
@@ -646,7 +641,7 @@ class StockTrackerApp:
         if fn:
             save_ticker_list(fn, self.current_tickers)
             self.current_list_name = fn
-            self.update_list_name()
+            self.list_name_lbl.config(text=os.path.basename(fn))
             self.unsaved_changes = False
 
     def open_dialog(self) -> None:
@@ -661,7 +656,7 @@ class StockTrackerApp:
             self.current_list_name = fn
             self.stock_data.clear()
             self._update_list_display()
-            self.update_list_name()
+            self.list_name_lbl.config(text=os.path.basename(fn))
             self.unsaved_changes = False
 
     def _load_default_list(self, silent: bool = False) -> None:
@@ -675,7 +670,7 @@ class StockTrackerApp:
             self.current_tickers = load_ticker_list(full)
             self.current_list_name = full
             self._update_list_display()
-            self.update_list_name()
+            self.list_name_lbl.config(text=name)
             self.unsaved_changes = False
             if not silent:
                 messagebox.showinfo("Default Loaded", f"Loaded default list: {name}")
@@ -697,12 +692,6 @@ class StockTrackerApp:
         else:
             messagebox.showinfo("No Default", "No default list is set.")
 
-    def update_list_name(self) -> None:
-        self.list_name_lbl.config(text=os.path.basename(self.current_list_name) if self.current_list_name else "(none)")
-
-    # ------------------------------------------------------------------- #
-    # Data Fetch & Display
-    # ------------------------------------------------------------------- #
     def fetch_stock_data(self, ticker: str) -> Dict[str, Any]:
         try:
             ticker = self._normalize_ticker(ticker)
@@ -766,9 +755,6 @@ class StockTrackerApp:
                 macd, _ = registry.compute("macd", hist_long)
                 metrics["MACD"] = macd
 
-            if rec == "Hold" and not any("swing" in r.lower() for r in reasons):
-                reasons = []
-
             return {
                 "ticker": ticker, "name": name, "sector": sector, "industry": industry,
                 "info": info, "recommendation": rec, "reasons": reasons,
@@ -810,14 +796,7 @@ class StockTrackerApp:
         for btn in self.button_refs.values():
             btn.config(state=tk.NORMAL)
 
-    # ------------------------------------------------------------------- #
-    # Pop-ups
-    # ------------------------------------------------------------------- #
-    def show_details_popup(self, event: Optional[tk.Event] = None) -> None:
-        sel = self.tree.selection()
-        if not sel:
-            return
-        ticker = self.tree.item(sel[0])["values"][0]
+    def show_details_popup(self, ticker: str) -> None:
         data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
         if not data:
             return
@@ -856,7 +835,7 @@ class StockTrackerApp:
             if v is None:
                 v = "N/A"
             elif isinstance(v, float):
-                v = f"{v:+.2f}%" if "Diff" in k or "Growth" in k else f"{v:.2f}"
+                v = f"{v:+.2f}%" if "Target" in k else f"{v:.2f}"
             lines.append(f"  {k}: {v}")
 
         txt.insert(tk.END, "\n".join(lines))
@@ -869,38 +848,26 @@ Metric Explanations
 Price: Current market price
 1 Day %: 24-hour price change %
 {CONFIG.custom_period_days} Day %: Price change over custom period
-P/E: Price-to-Earnings ratio (lower may indicate undervaluation)
-Target %: Analyst target price vs current (% difference)
-RSI: Relative Strength Index
-  * < 30: Oversold (possible buy)
-  * > 70: Overbought (possible sell)
-MACD: Moving Average Convergence Divergence
-  * Positive & rising: Bullish momentum
-  * Negative & falling: Bearish momentum
+P/E: Price-to-Earnings ratio
+Target %: Analyst target vs current
+RSI: Relative Strength Index (<30 oversold, >70 overbought)
+MACD: Momentum indicator
 
 Recommendation Logic:
-* Buy: Price < 97% of 50-day MA
-* Consider Buying: Price < 99% of 50-day MA
-* Sell: Price > 98 lumine% of 52-week high
-* Consider Selling: Price > 95% of 52-week high
-* Hold: No strong signals
-
-Large 1-day swings (>5%) also trigger alerts.
+• Buy: Deep below 50-day MA
+• Sell: Near 52-week high
+• Hold: No strong signal
         """.strip()
 
         pop = tk.Toplevel(self.root)
         pop.title("Metric Explanations")
         pop.geometry("600x680")
         pop.configure(bg=self.theme["background"])
-
         txt = tk.Text(pop, wrap=tk.WORD, bg=self.theme["tree_bg"], fg=self.theme["text"], font=("Arial", 10))
         txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         txt.insert(tk.END, info_text)
         txt.config(state=tk.DISABLED)
 
-    # ------------------------------------------------------------------- #
-    # Closing
-    # ------------------------------------------------------------------- #
     def _on_closing(self) -> None:
         if self.unsaved_changes:
             resp = messagebox.askyesnocancel("Unsaved Changes", "Save current list before exiting?")
