@@ -229,7 +229,7 @@ registry.register("macd", get_macd)
 class StockTrackerApp:
     def __init__(self, root: tk.Tk, theme: str = "dark") -> None:
         self.root = root
-        self.root.title("Finance Tracker by Mattias")
+        self.root.title("Stock Tracker by Mattias")
         self.root.minsize(CONFIG.min_window_width, CONFIG.min_window_height)
         self.theme = THEMES[theme]
         self.root.configure(bg=self.theme["background"])
@@ -239,12 +239,14 @@ class StockTrackerApp:
         self.current_tickers: List[str] = []
         self.current_list_name: str = ""
         self.unsaved_changes: bool = False
+        self.filter_query: str = "" # New member for search state
 
         self._sort_column: str = "Recommendation"
         self._sort_reverse: bool = False
 
         self.rows = []
         self.header_labels = []
+        self.search_entry: Optional[tk.Entry] = None # New member for search input
 
         self._setup_menu()
         self._setup_ui()
@@ -263,7 +265,7 @@ class StockTrackerApp:
         file_menu.add_command(label="Save", command=self.save_current_list)
         file_menu.add_command(label="Save as", command=self.save_list_as)
         file_menu.add_separator()
-        file_menu.add_command(label="Export Data As CSV...", command=lambda: export_to_csv(self.stock_data))
+        file_menu.add_command(label="Export Data As CSV", command=lambda: export_to_csv(self.stock_data))
         file_menu.add_separator()
         file_menu.add_command(label="Set as Default", command=self.set_as_default)
         file_menu.add_command(label="Remove Default", command=self.remove_default)
@@ -286,6 +288,7 @@ class StockTrackerApp:
         top_frame = tk.Frame(mgmt, bg=self.theme["background"])
         top_frame.pack(fill=tk.X, pady=(0, 5))
 
+        # --- List Info ---
         name_frame = tk.Frame(top_frame, bg=self.theme["background"])
         name_frame.pack(side=tk.LEFT)
         tk.Label(name_frame, text="Current List:", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
@@ -295,6 +298,7 @@ class StockTrackerApp:
         )
         self.list_name_lbl.pack(side=tk.LEFT, padx=(5, 0))
 
+        # --- Add Ticker ---
         add_frame = tk.Frame(top_frame, bg=self.theme["background"])
         add_frame.pack(side=tk.LEFT, padx=(20, 0))
         tk.Label(add_frame, text="Add Ticker:", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
@@ -308,6 +312,23 @@ class StockTrackerApp:
             add_frame, text="Add", command=self.add_ticker_from_entry,
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
+        
+        # --- Search Functionality ---
+        search_frame = tk.Frame(top_frame, bg=self.theme["background"])
+        search_frame.pack(side=tk.LEFT, padx=(20, 0))
+        tk.Label(search_frame, text="Search (Ticker/Name):", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
+        self.search_entry = tk.Entry(
+            search_frame, width=20, bg=self.theme["entry"], fg=self.theme["text"],
+            insertbackground=self.theme["text"]
+        )
+        self.search_entry.pack(side=tk.LEFT, padx=(5, 0))
+        self.search_entry.bind("<Return>", lambda e: self.filter_list(self.search_entry.get()))
+        tk.Button(
+            search_frame, text="Search", command=lambda: self.filter_list(self.search_entry.get()),
+            bg=self.theme["button"], fg=self.theme["text"]
+        ).pack(side=tk.LEFT, padx=5)
+        # The 'Clear Filter' button has been removed as requested.
+
 
         action_frame = tk.Frame(top_frame, bg=self.theme["background"])
         action_frame.pack(expand=True)
@@ -394,6 +415,36 @@ class StockTrackerApp:
             fg=self.theme["text"], font=("Arial", 10)
         )
         self.status_lbl.pack(pady=(0, 5))
+        
+    def filter_list(self, query: str) -> None:
+        """Filter the displayed stock rows based on the ticker or name."""
+        self.filter_query = query.strip().upper()
+        if self.search_entry:
+            if not self.filter_query:
+                self.search_entry.delete(0, tk.END)
+                self.status_lbl.config(text="Filter cleared. Showing all stocks.")
+            else:
+                self.status_lbl.config(text=f"Filtered by: '{query}'")
+
+        # Sort the rows first, so that the displayed order is correct
+        self._sort_by_column(self._sort_column) 
+
+        filtered_count = 0
+        
+        # Iterate over the already sorted rows and show/hide the frame
+        for row in self.rows:
+            ticker = row['ticker']
+            name = row['data'].get('name', 'N/A') if row['data'] else 'N/A'
+            
+            # Check if the query is in the ticker or the name (case-insensitive)
+            if not self.filter_query or self.filter_query in ticker or self.filter_query in name.upper():
+                row["frame"].pack(fill=tk.X, pady=1)
+                filtered_count += 1
+            else:
+                row["frame"].pack_forget()
+
+        if self.filter_query:
+            self.status_lbl.config(text=f"Showing {filtered_count}/{len(self.current_tickers)} stock(s) matching '{query}'.")
 
     def _update_sort_indicator(self):
         for lbl in self.header_labels:
@@ -420,32 +471,59 @@ class StockTrackerApp:
         col_idx = next((i for i, h in enumerate(self.header_labels) if h.cget("text").split(" ")[0] == col_text), None)
         if col_idx is None:
             return
-
-        def key_func(row):
-            val = row["labels"][col_idx].cget("text")
-            if val in ("N/A", ""):
-                return (1, 0)
-            if "%" in val:
-                try:
-                    return (0, float(val.replace("%", "").replace("+", "").replace(" ", "")))
-                except:
+            
+        # Special handling for "Recommendation" column sorting
+        if self._sort_column == "Recommendation":
+            # Use the priority map for Recommendation sorting
+            priority_map = {
+                "Sell": 0,
+                "Consider Selling": 1, 
+                "Buy": 2,
+                "Consider Buying": 3,
+                "Hold": 4, 
+            }
+            def rec_key_func(row):
+                data = row["data"]
+                if not data: return (5, "Z") # Unknown data goes last
+                rec = data.get("recommendation", "Unknown")
+                return (priority_map.get(rec, 5), rec)
+                
+            self.rows.sort(key=rec_key_func, reverse=self._sort_reverse)
+        else:
+            def key_func(row):
+                val = row["labels"][col_idx].cget("text")
+                if val in ("N/A", "", "Error"):
                     return (1, 0)
-            try:
-                return (0, float(val))
-            except:
-                return (1, val.lower())
+                if "%" in val:
+                    try:
+                        return (0, float(val.replace("%", "").replace("+", "").replace(" ", "")))
+                    except:
+                        return (1, 0)
+                try:
+                    return (0, float(val))
+                except:
+                    return (1, val.lower())
 
-        self.rows.sort(key=key_func, reverse=self._sort_reverse)
-
+            self.rows.sort(key=key_func, reverse=self._sort_reverse)
+        
+        # Re-pack the sorted rows, respecting the current filter
         for row in self.rows:
             row["frame"].pack_forget()
+
         for row in self.rows:
-            row["frame"].pack(fill=tk.X, pady=1)
+            ticker = row['ticker']
+            name = row['data'].get('name', 'N/A') if row['data'] else 'N/A'
+            if not self.filter_query or self.filter_query in ticker or self.filter_query in name.upper():
+                row["frame"].pack(fill=tk.X, pady=1)
+
 
     def _update_list_display(self) -> None:
         for row in self.rows:
             row["frame"].destroy()
         self.rows.clear()
+        self.filter_query = "" # Clear filter on full list update
+        if self.search_entry:
+            self.search_entry.delete(0, tk.END)
 
         if not self.current_tickers:
             self.status_lbl.config(text="Ready")
@@ -456,11 +534,22 @@ class StockTrackerApp:
             data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
             priority = 6
             if data:
-                priority = {"Sell": 0, "Consider Selling": 1, "Buy": 2,
-                            "Consider Buying": 3, "Hold": 4}.get(data["recommendation"], 5)
+                # UPDATED SORT PRIORITY LOGIC
+                # Lower number = higher priority (comes first/on top when sorted by ascending)
+                priority = {
+                    "Sell": 0,           # Highest Priority
+                    "Consider Selling": 1,
+                    "Buy": 2,            
+                    "Consider Buying": 3,
+                    "Hold": 4,           # Lowest Actionable Priority
+                }.get(data["recommendation"], 5)
             display_data.append((ticker, data, priority))
 
-        display_data.sort(key=lambda x: x[2])
+        # We primarily use the sort function now, but this initial sort 
+        # is still useful for initial list display when no explicit sort
+        # has been applied, and it will be overridden by _sort_by_column 
+        # later if a column is clicked.
+        display_data.sort(key=lambda x: x[2]) 
 
         char_widths = [10, 25, 16, 10, 10, 12, 14, 16, 8, 10, 8, 10]
 
@@ -483,7 +572,7 @@ class StockTrackerApp:
                 ticker,
                 data["name"] if data else "",
                 data["recommendation"] if data else "",
-                f"{data['info'].get('regularMarketPrice', ''):.2f}" if data else "",
+                f"{data['info'].get('regularMarketPrice', ''):.2f}" if data and data['info'].get('regularMarketPrice') is not None else "",
                 data.get("price_swing_1d", "N/A") if data else "N/A",
                 data.get("price_swing_1m", "N/A") if data else "N/A",
                 data["sector"] if data else "",
@@ -566,6 +655,7 @@ class StockTrackerApp:
             return
 
         self.current_tickers.insert(0, norm)
+        self.stock_data.clear() # Clear data so it's re-fetched
         self._update_list_display()
         self.unsaved_changes = True
         self.status_lbl.config(text=f"Added {norm}")
@@ -603,7 +693,10 @@ class StockTrackerApp:
                 if days <= 0:
                     raise ValueError
                 CONFIG.custom_period_days = days
+                
+                # Update header label for 1-month swing
                 self.header_labels[5].config(text=f"{days} Day %")
+                
                 pop.destroy()
                 messagebox.showinfo("Updated", f"Custom period set to {days} days.")
                 if self.stock_data:
@@ -669,6 +762,7 @@ class StockTrackerApp:
         if os.path.exists(full):
             self.current_tickers = load_ticker_list(full)
             self.current_list_name = full
+            self.stock_data.clear() # Clear data to force a re-fetch
             self._update_list_display()
             self.list_name_lbl.config(text=name)
             self.unsaved_changes = False
@@ -691,6 +785,72 @@ class StockTrackerApp:
             messagebox.showinfo("Default Removed", "Default list removed.")
         else:
             messagebox.showinfo("No Default", "No default list is set.")
+            
+    def show_info_popup(self, event=None) -> None:
+        """Shows a popup with explanations of the metrics."""
+        info_text = (
+            "Stock Tracker Metrics Explained:\n\n"
+            "Recommendation: Derived from comparing the current price to the 50-day moving average (MA) "
+            "and the 52-week high, with configurable thresholds.\n"
+            "P/E: Trailing Price-to-Earnings Ratio. High P/E (e.g., >30) may suggest overvaluation.\n"
+            "Target %: Percentage difference between the Analyst Mean Target Price and the current price.\n"
+            "RSI: Relative Strength Index (14-day). >70 is Overbought (potential sell), <30 is Oversold (potential buy).\n"
+            "MACD: Moving Average Convergence Divergence (12/26 periods). Helps identify momentum and trend direction.\n"
+            "Day %: Price swing percentage for 1 day and the custom period (currently set to "
+            f"{CONFIG.custom_period_days} days)."
+        )
+
+        pop = tk.Toplevel(self.root)
+        pop.title("Stock Tracker Metric Info")
+        pop.configure(bg=self.theme["background"])
+        pop.transient(self.root)
+        pop.grab_set()
+
+        tk.Label(pop, text=info_text, justify=tk.LEFT, padx=10, pady=10,
+                 bg=self.theme["background"], fg=self.theme["text"]).pack()
+        tk.Button(pop, text="Close", command=pop.destroy, bg=self.theme["button"], fg=self.theme["text"]).pack(pady=5)
+        
+    def show_details_popup(self, ticker: str) -> None:
+        """Shows a detailed popup for the selected stock."""
+        data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
+        if not data:
+            messagebox.showerror("Error", f"No data found for {ticker}.")
+            return
+
+        pop = tk.Toplevel(self.root)
+        pop.title(f"Details: {ticker} ({data['name']})")
+        pop.configure(bg=self.theme["background"])
+        pop.transient(self.root)
+        pop.grab_set()
+
+        # Build detailed information string
+        info = data['info']
+        metrics = data['metrics']
+        
+        detail_text = f"Ticker: {ticker}\n"
+        detail_text += f"Name: {data['name']}\n"
+        detail_text += f"Recommendation: {data['recommendation']} ({', '.join(data['reasons'])})\n"
+        detail_text += f"Sector/Industry: {data['sector']} / {data['industry']}\n"
+        detail_text += "--- Price & Performance ---\n"
+        detail_text += f"Current Price: {info.get('regularMarketPrice', 'N/A'):.2f}\n"
+        detail_text += f"Previous Close: {info.get('previousClose', 'N/A'):.2f}\n"
+        detail_text += f"50-Day Avg: {info.get('fiftyDayAverage', 'N/A'):.2f}\n"
+        detail_text += f"52-Week High: {info.get('fiftyTwoWeekHigh', 'N/A'):.2f}\n"
+        detail_text += f"52-Week Low: {info.get('fiftyTwoWeekLow', 'N/A'):.2f}\n"
+        detail_text += f"1 Day Swing: {data.get('price_swing_1d', 'N/A')}\n"
+        detail_text += f"{CONFIG.custom_period_days} Day Swing: {data.get('price_swing_1m', 'N/A')}\n"
+        detail_text += "--- Key Metrics ---\n"
+        detail_text += f"Trailing P/E: {metrics.get('P/E', 'N/A'):.1f}\n"
+        if metrics.get('Target %') is not None:
+             detail_text += f"Analyst Target Price: {metrics.get('Target', 'N/A'):.2f} ({metrics.get('Target %'):+.1f}%)\n"
+        else:
+             detail_text += f"Analyst Target Price: {metrics.get('Target', 'N/A'):.2f} (N/A)\n"
+        detail_text += f"RSI: {metrics.get('RSI', 'N/A'):.1f}\n"
+        detail_text += f"MACD: {metrics.get('MACD', 'N/A'):+.3f}\n"
+        
+        tk.Label(pop, text=detail_text, justify=tk.LEFT, padx=10, pady=10,
+                 bg=self.theme["background"], fg=self.theme["text"], font=("Consolas", 10)).pack()
+        tk.Button(pop, text="Close", command=pop.destroy, bg=self.theme["button"], fg=self.theme["text"]).pack(pady=5)
 
     def fetch_stock_data(self, ticker: str) -> Dict[str, Any]:
         try:
@@ -713,7 +873,7 @@ class StockTrackerApp:
             if not hist_1d.empty and len(hist_1d) >= 2:
                 close = hist_1d["Close"]
                 swing_1d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-                if abs(swing_1d) >= CONFIG.price_swing_threshold:
+                if swing_1d is not None and abs(swing_1d) >= CONFIG.price_swing_threshold:
                     reasons.append(f"1-day {swing_1d:+.2f}%")
 
             swing_1m: Optional[float] = None
@@ -780,102 +940,33 @@ class StockTrackerApp:
         for btn in self.button_refs.values():
             btn.config(state=tk.DISABLED)
 
-        def fetch_all() -> None:
-            with ThreadPoolExecutor(max_workers=min(len(self.current_tickers), CONFIG.max_threads)) as executor:
-                futures = {executor.submit(self.fetch_stock_data, t): t for t in self.current_tickers}
-                results = []
-                for future in as_completed(futures):
-                    results.append(future.result())
-            self.root.after(0, self._display_results, results)
+        # Use a ThreadPoolExecutor for concurrent fetching
+        new_data: List[Dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=CONFIG.max_threads) as executor:
+            future_to_ticker = {
+                executor.submit(self.fetch_stock_data, t): t
+                for t in self.current_tickers
+            }
+            for i, future in enumerate(as_completed(future_to_ticker)):
+                try:
+                    data = future.result()
+                    new_data.append(data)
+                    self.status_lbl.config(text=f"Fetched data for {data['ticker']} ({i+1}/{len(self.current_tickers)})...")
+                    self.root.update_idletasks()
+                except Exception as e:
+                    log_and_show("Thread Error", f"Error fetching data for a ticker: {e}", "fetch_and_display")
 
-        self.root.after(0, fetch_all)
-
-    def _display_results(self, data: List[Dict[str, Any]]) -> None:
-        self.stock_data = data
+        self.stock_data = new_data
         self._update_list_display()
+
         for btn in self.button_refs.values():
             btn.config(state=tk.NORMAL)
 
-    def show_details_popup(self, ticker: str) -> None:
-        data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
-        if not data:
-            return
-
-        pop = tk.Toplevel(self.root)
-        pop.title(f"Details: {ticker}")
-        pop.geometry("560x720")
-        pop.configure(bg=self.theme["background"])
-
-        txt = tk.Text(pop, wrap=tk.WORD, bg=self.theme["tree_bg"], fg=self.theme["text"], font=("Consolas", 10))
-        txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        lines = [
-            f"Ticker: {data['ticker']}",
-            f"Name: {data['name']}",
-            f"Sector: {data['sector']}",
-            f"Industry: {data['industry']}",
-            f"Recommendation: {data['recommendation']}",
-            "",
-            "Reasons:" if data['reasons'] else "No active signals."
-        ]
-        lines.extend(f"  * {r}" for r in data['reasons'])
-        lines.append("")
-        lines.append("Market Data:")
-        for k in ("regularMarketPrice", "previousClose", "fiftyTwoWeekHigh", "fiftyTwoWeekLow", "fiftyDayAverage", "trailingPE"):
-            v = data["info"].get(k, "N/A")
-            if isinstance(v, float):
-                v = f"{v:.2f}"
-            lines.append(f"  {k}: {v}")
-        lines.append("")
-        lines.append(f"1 Day %: {data['price_swing_1d']}")
-        lines.append(f"{CONFIG.custom_period_days} Day %: {data['price_swing_1m']}")
-        lines.append("")
-        lines.append("Extra Metrics:")
-        for k, v in data["metrics"].items():
-            if v is None:
-                v = "N/A"
-            elif isinstance(v, float):
-                v = f"{v:+.2f}%" if "Target" in k else f"{v:.2f}"
-            lines.append(f"  {k}: {v}")
-
-        txt.insert(tk.END, "\n".join(lines))
-        txt.config(state=tk.DISABLED)
-
-    def show_info_popup(self) -> None:
-        info_text = f"""
-Metric Explanations
-
-Price: Current market price
-1 Day %: 24-hour price change %
-{CONFIG.custom_period_days} Day %: Price change over custom period
-P/E: Price-to-Earnings ratio
-Target %: Analyst target vs current
-RSI: Relative Strength Index (<30 oversold, >70 overbought)
-MACD: Momentum indicator
-
-Recommendation Logic:
-• Buy: Deep below 50-day MA
-• Sell: Near 52-week high
-• Hold: No strong signal
-        """.strip()
-
-        pop = tk.Toplevel(self.root)
-        pop.title("Metric Explanations")
-        pop.geometry("600x680")
-        pop.configure(bg=self.theme["background"])
-        txt = tk.Text(pop, wrap=tk.WORD, bg=self.theme["tree_bg"], fg=self.theme["text"], font=("Arial", 10))
-        txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        txt.insert(tk.END, info_text)
-        txt.config(state=tk.DISABLED)
-
     def _on_closing(self) -> None:
         if self.unsaved_changes:
-            resp = messagebox.askyesnocancel("Unsaved Changes", "Save current list before exiting?")
-            if resp is True:
+            if messagebox.askyesno("Exit", "Unsaved changes! Save before exiting?"):
                 self.save_current_list()
-            elif resp is None:
-                return
-        self.root.quit()
+        self.root.destroy()
 
 
 if __name__ == "__main__":
