@@ -14,6 +14,8 @@ import tkinter as tk
 from tkinter import messagebox, filedialog
 import yfinance as yf
 
+from stock_search import open_stock_search
+
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -312,11 +314,15 @@ class StockTrackerApp:
             add_frame, text="Add", command=self.add_ticker_from_entry,
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
+        tk.Button(
+            add_frame, text="Add Stock", command=self.open_search_dialog,
+            bg=self.theme["button"], fg=self.theme["text"], width=20
+        ).pack(side=tk.LEFT, padx=2)
         
         # --- Search Functionality ---
         search_frame = tk.Frame(top_frame, bg=self.theme["background"])
         search_frame.pack(side=tk.LEFT, padx=(20, 0))
-        tk.Label(search_frame, text="Search (Ticker/Name):", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
+        tk.Label(search_frame, text="Search in list:", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
         self.search_entry = tk.Entry(
             search_frame, width=20, bg=self.theme["entry"], fg=self.theme["text"],
             insertbackground=self.theme["text"]
@@ -635,6 +641,22 @@ class StockTrackerApp:
             return bool(info.get("regularMarketPrice") or info.get("shortName"))
         except Exception:
             return False
+
+    def open_search_dialog(self) -> None:
+        """Open the stock search dialog."""
+        def add_ticker_callback(ticker: str) -> None:
+            """Callback to add ticker from search dialog."""
+            norm = self._normalize_ticker(ticker)
+            if norm in self.current_tickers:
+                messagebox.showinfo("Duplicate", f"'{norm}' is already in your list.")
+                return
+            
+            self.current_tickers.insert(0, norm)
+            self._update_list_display()
+            self.unsaved_changes = True
+            self.status_lbl.config(text=f"Added {norm} - Click 'Fetch Data' to analyze")
+        
+        open_stock_search(self.root, self.theme, add_ticker_callback)
 
     def add_ticker_from_entry(self) -> None:
         raw = self.add_entry.get().strip().upper()
