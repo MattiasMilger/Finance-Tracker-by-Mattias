@@ -262,7 +262,6 @@ class StockTrackerApp:
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="New", command=self.new_list)
-        file_menu.add_command(label="Search & Add Stocks", command=self.open_search_dialog)
         file_menu.add_command(label="Open", command=self.open_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Save", command=self.save_current_list)
@@ -305,7 +304,7 @@ class StockTrackerApp:
         add_frame = tk.Frame(top_frame, bg=self.theme["background"])
         add_frame.pack(side=tk.LEFT, padx=(20, 0))
         tk.Button(
-            add_frame, text="Search & Add Stocks...", command=self.open_search_dialog,
+            add_frame, text="Search & Add Stocks", command=self.open_search_dialog,
             bg=self.theme["button"], fg=self.theme["text"], width=20
         ).pack(side=tk.LEFT, padx=2)
         tk.Button(
