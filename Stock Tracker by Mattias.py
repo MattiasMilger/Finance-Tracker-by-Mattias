@@ -303,17 +303,6 @@ class StockTrackerApp:
         # --- Add Ticker ---
         add_frame = tk.Frame(top_frame, bg=self.theme["background"])
         add_frame.pack(side=tk.LEFT, padx=(20, 0))
-        tk.Label(add_frame, text="Add Ticker:", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
-        self.add_entry = tk.Entry(
-            add_frame, width=15, bg=self.theme["entry"], fg=self.theme["text"],
-            insertbackground=self.theme["text"]
-        )
-        self.add_entry.pack(side=tk.LEFT, padx=(5, 0))
-        self.add_entry.bind("<Return>", lambda e: self.add_ticker_from_entry())
-        tk.Button(
-            add_frame, text="Add", command=self.add_ticker_from_entry,
-            bg=self.theme["button"], fg=self.theme["text"]
-        ).pack(side=tk.LEFT, padx=5)
         tk.Button(
             add_frame, text="Add Stock", command=self.open_search_dialog,
             bg=self.theme["button"], fg=self.theme["text"], width=20
@@ -335,7 +324,6 @@ class StockTrackerApp:
         ).pack(side=tk.LEFT, padx=5)
         # The 'Clear Filter' button has been removed as requested.
 
-
         action_frame = tk.Frame(top_frame, bg=self.theme["background"])
         action_frame.pack(expand=True)
 
@@ -349,7 +337,7 @@ class StockTrackerApp:
 
         fetch_btn = tk.Button(
             action_frame, text="Fetch Data", command=self.fetch_and_display,
-            bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
+            bg=self.theme["button"], fg=self.theme["text"], width=20
         )
         fetch_btn.pack(side=tk.LEFT, padx=40)
         self.button_refs["Fetch Data"] = fetch_btn
@@ -657,30 +645,6 @@ class StockTrackerApp:
             self.status_lbl.config(text=f"Added {norm} - Click 'Fetch Data' to analyze")
         
         open_stock_search(self.root, self.theme, add_ticker_callback)
-
-    def add_ticker_from_entry(self) -> None:
-        raw = self.add_entry.get().strip().upper()
-        self.add_entry.delete(0, tk.END)
-        if not raw or not self._validate_ticker(raw):
-            messagebox.showwarning("Invalid", f"'{raw}' is invalid or too long.")
-            return
-        norm = self._normalize_ticker(raw)
-        if norm in self.current_tickers:
-            messagebox.showinfo("Duplicate", f"'{norm}' already in list.")
-            return
-
-        self.status_lbl.config(text=f"Checking {norm}...")
-        self.root.update_idletasks()
-        if not self._ticker_exists(norm):
-            messagebox.showerror("Invalid Ticker", f"'{norm}' does not exist.")
-            self.status_lbl.config(text="Ready")
-            return
-
-        self.current_tickers.insert(0, norm)
-        self.stock_data.clear() # Clear data so it's re-fetched
-        self._update_list_display()
-        self.unsaved_changes = True
-        self.status_lbl.config(text=f"Added {norm}")
 
     def remove_selected(self) -> None:
         self._update_list_display()
