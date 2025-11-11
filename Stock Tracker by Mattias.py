@@ -241,14 +241,14 @@ class StockTrackerApp:
         self.current_tickers: List[str] = []
         self.current_list_name: str = ""
         self.unsaved_changes: bool = False
-        self.filter_query: str = "" # New member for search state
+        self.filter_query: str = ""
 
         self._sort_column: str = "Recommendation"
         self._sort_reverse: bool = False
 
         self.rows = []
         self.header_labels = []
-        self.search_entry: Optional[tk.Entry] = None # New member for search input
+        self.search_entry: Optional[tk.Entry] = None
 
         self._setup_menu()
         self._setup_ui()
@@ -262,6 +262,7 @@ class StockTrackerApp:
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="New", command=self.new_list)
+        file_menu.add_command(label="Search & Add Stocks", command=self.open_search_dialog)
         file_menu.add_command(label="Open", command=self.open_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Save", command=self.save_current_list)
@@ -300,18 +301,22 @@ class StockTrackerApp:
         )
         self.list_name_lbl.pack(side=tk.LEFT, padx=(5, 0))
 
-        # --- Add Ticker ---
+        # --- Search & Add / Remove ---
         add_frame = tk.Frame(top_frame, bg=self.theme["background"])
         add_frame.pack(side=tk.LEFT, padx=(20, 0))
         tk.Button(
-            add_frame, text="Add Stock", command=self.open_search_dialog,
+            add_frame, text="Search & Add Stocks...", command=self.open_search_dialog,
             bg=self.theme["button"], fg=self.theme["text"], width=20
         ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            add_frame, text="Remove Stocks", command=self.remove_selected,
+            bg=self.theme["button"], fg=self.theme["text"], width=15
+        ).pack(side=tk.LEFT, padx=2)
         
-        # --- Search Functionality ---
+        # --- Search/Filter Functionality ---
         search_frame = tk.Frame(top_frame, bg=self.theme["background"])
         search_frame.pack(side=tk.LEFT, padx=(20, 0))
-        tk.Label(search_frame, text="Search in list:", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
+        tk.Label(search_frame, text="Filter (Ticker/Name):", bg=self.theme["background"], fg=self.theme["text"]).pack(side=tk.LEFT)
         self.search_entry = tk.Entry(
             search_frame, width=20, bg=self.theme["entry"], fg=self.theme["text"],
             insertbackground=self.theme["text"]
@@ -319,27 +324,20 @@ class StockTrackerApp:
         self.search_entry.pack(side=tk.LEFT, padx=(5, 0))
         self.search_entry.bind("<Return>", lambda e: self.filter_list(self.search_entry.get()))
         tk.Button(
-            search_frame, text="Search", command=lambda: self.filter_list(self.search_entry.get()),
+            search_frame, text="Filter", command=lambda: self.filter_list(self.search_entry.get()),
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
-        # The 'Clear Filter' button has been removed as requested.
 
+        # Fetch Data button (centered on the right)
         action_frame = tk.Frame(top_frame, bg=self.theme["background"])
-        action_frame.pack(expand=True)
+        action_frame.pack(side=tk.RIGHT, padx=(20, 0))
 
-        left_actions = tk.Frame(action_frame, bg=self.theme["background"])
-        left_actions.pack(side=tk.LEFT, padx=20)
-        for txt, cmd in [("Remove", self.remove_selected), ("Clear All", self.clear_all)]:
-            btn = tk.Button(left_actions, text=txt, command=cmd, width=12,
-                            bg=self.theme["button"], fg=self.theme["text"])
-            btn.pack(side=tk.LEFT, padx=2)
-            self.button_refs[txt] = btn
-
+        # Fetch Data button
         fetch_btn = tk.Button(
             action_frame, text="Fetch Data", command=self.fetch_and_display,
-            bg=self.theme["button"], fg=self.theme["text"], width=20
+            bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
         )
-        fetch_btn.pack(side=tk.LEFT, padx=40)
+        fetch_btn.pack()
         self.button_refs["Fetch Data"] = fetch_btn
 
         # === CANVAS TABLE ===
@@ -420,17 +418,14 @@ class StockTrackerApp:
             else:
                 self.status_lbl.config(text=f"Filtered by: '{query}'")
 
-        # Sort the rows first, so that the displayed order is correct
         self._sort_by_column(self._sort_column) 
 
         filtered_count = 0
         
-        # Iterate over the already sorted rows and show/hide the frame
         for row in self.rows:
             ticker = row['ticker']
             name = row['data'].get('name', 'N/A') if row['data'] else 'N/A'
             
-            # Check if the query is in the ticker or the name (case-insensitive)
             if not self.filter_query or self.filter_query in ticker or self.filter_query in name.upper():
                 row["frame"].pack(fill=tk.X, pady=1)
                 filtered_count += 1
@@ -466,9 +461,7 @@ class StockTrackerApp:
         if col_idx is None:
             return
             
-        # Special handling for "Recommendation" column sorting
         if self._sort_column == "Recommendation":
-            # Use the priority map for Recommendation sorting
             priority_map = {
                 "Sell": 0,
                 "Consider Selling": 1, 
@@ -478,7 +471,7 @@ class StockTrackerApp:
             }
             def rec_key_func(row):
                 data = row["data"]
-                if not data: return (5, "Z") # Unknown data goes last
+                if not data: return (5, "Z")
                 rec = data.get("recommendation", "Unknown")
                 return (priority_map.get(rec, 5), rec)
                 
@@ -500,7 +493,6 @@ class StockTrackerApp:
 
             self.rows.sort(key=key_func, reverse=self._sort_reverse)
         
-        # Re-pack the sorted rows, respecting the current filter
         for row in self.rows:
             row["frame"].pack_forget()
 
@@ -510,12 +502,11 @@ class StockTrackerApp:
             if not self.filter_query or self.filter_query in ticker or self.filter_query in name.upper():
                 row["frame"].pack(fill=tk.X, pady=1)
 
-
     def _update_list_display(self) -> None:
         for row in self.rows:
             row["frame"].destroy()
         self.rows.clear()
-        self.filter_query = "" # Clear filter on full list update
+        self.filter_query = ""
         if self.search_entry:
             self.search_entry.delete(0, tk.END)
 
@@ -528,21 +519,15 @@ class StockTrackerApp:
             data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
             priority = 6
             if data:
-                # UPDATED SORT PRIORITY LOGIC
-                # Lower number = higher priority (comes first/on top when sorted by ascending)
                 priority = {
-                    "Sell": 0,           # Highest Priority
+                    "Sell": 0,
                     "Consider Selling": 1,
                     "Buy": 2,            
                     "Consider Buying": 3,
-                    "Hold": 4,           # Lowest Actionable Priority
+                    "Hold": 4,
                 }.get(data["recommendation"], 5)
             display_data.append((ticker, data, priority))
 
-        # We primarily use the sort function now, but this initial sort 
-        # is still useful for initial list display when no explicit sort
-        # has been applied, and it will be overridden by _sort_by_column 
-        # later if a column is clicked.
         display_data.sort(key=lambda x: x[2]) 
 
         char_widths = [10, 25, 16, 10, 10, 12, 14, 16, 8, 10, 8, 10]
@@ -609,7 +594,6 @@ class StockTrackerApp:
         total = len(self.current_tickers)
         self.status_lbl.config(text=f"Fetched {fetched}/{total} stock(s).")
 
-    # === ALL OTHER METHODS (add_ticker, fetch, etc.) remain unchanged ===
     def _normalize_ticker(self, t: str) -> str:
         t = t.upper().strip()
         for suf, norm in TICKER_SUFFIX_MAP.items():
@@ -632,32 +616,126 @@ class StockTrackerApp:
 
     def open_search_dialog(self) -> None:
         """Open the stock search dialog."""
-        def add_ticker_callback(ticker: str) -> None:
-            """Callback to add ticker from search dialog."""
+        def add_ticker_callback(ticker: str) -> bool:
+            """Callback to add ticker from search dialog. Returns True if added, False if duplicate."""
             norm = self._normalize_ticker(ticker)
             if norm in self.current_tickers:
                 messagebox.showinfo("Duplicate", f"'{norm}' is already in your list.")
-                return
+                return False
             
             self.current_tickers.insert(0, norm)
             self._update_list_display()
             self.unsaved_changes = True
             self.status_lbl.config(text=f"Added {norm} - Click 'Fetch Data' to analyze")
+            return True
         
         open_stock_search(self.root, self.theme, add_ticker_callback)
 
     def remove_selected(self) -> None:
-        self._update_list_display()
-        self.unsaved_changes = True
-
-    def clear_all(self) -> None:
-        if not self.current_tickers:
+        """Remove selected ticker(s) from the list."""
+        if not self.rows:
+            messagebox.showinfo("Empty List", "No stocks to remove.")
             return
-        if messagebox.askyesno("Clear All", "Remove all tickers?"):
-            self.current_tickers.clear()
-            self.stock_data.clear()
+        
+        remove_dialog = tk.Toplevel(self.root)
+        remove_dialog.title("Remove Stocks")
+        remove_dialog.geometry("500x450")
+        remove_dialog.configure(bg=self.theme["background"])
+        remove_dialog.transient(self.root)
+        remove_dialog.grab_set()
+        
+        tk.Label(
+            remove_dialog,
+            text="Select stocks to remove:",
+            bg=self.theme["background"],
+            fg=self.theme["text"],
+            font=("Arial", 11, "bold")
+        ).pack(pady=10)
+        
+        list_frame = tk.Frame(remove_dialog, bg=self.theme["background"])
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        listbox = tk.Listbox(
+            list_frame,
+            selectmode=tk.MULTIPLE,
+            bg=self.theme["entry"],
+            fg=self.theme["text"],
+            font=("Consolas", 10),
+            yscrollcommand=scrollbar.set
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+        
+        for ticker in self.current_tickers:
+            data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
+            display_text = ticker
+            if data:
+                display_text += f" - {data['name']}"
+            listbox.insert(tk.END, display_text)
+        
+        btn_frame = tk.Frame(remove_dialog, bg=self.theme["background"])
+        btn_frame.pack(pady=10)
+        
+        def do_remove():
+            selected_indices = listbox.curselection()
+            if not selected_indices:
+                messagebox.showwarning("No Selection", "Please select at least one stock to remove.")
+                return
+            
+            tickers_to_remove = [self.current_tickers[i] for i in sorted(selected_indices, reverse=True)]
+            
+            for ticker in tickers_to_remove:
+                self.current_tickers.remove(ticker)
+                self.stock_data = [d for d in self.stock_data if d["ticker"] != ticker]
+            
             self._update_list_display()
             self.unsaved_changes = True
+            remove_dialog.destroy()
+            messagebox.showinfo("Removed", f"Removed {len(tickers_to_remove)} stock(s).")
+        
+        def do_remove_all():
+            if messagebox.askyesno("Remove All", "Are you sure you want to remove ALL stocks from the list?"):
+                self.current_tickers.clear()
+                self.stock_data.clear()
+                self._update_list_display()
+                self.unsaved_changes = True
+                remove_dialog.destroy()
+                messagebox.showinfo("Removed", "All stocks removed.")
+        
+        # Button layout
+        tk.Button(
+            btn_frame,
+            text="Remove Selected",
+            command=do_remove,
+            bg=self.theme["button"],
+            fg=self.theme["text"],
+            width=15
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(
+            btn_frame,
+            text="Remove All",
+            command=do_remove_all,
+            bg=self.theme["button"],
+            fg=self.theme["text"],
+            width=15
+        ).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(
+            btn_frame,
+            text="Cancel",
+            command=remove_dialog.destroy,
+            bg=self.theme["button"],
+            fg=self.theme["text"],
+            width=15
+        ).pack(side=tk.LEFT, padx=5)
+
+    def clear_all(self) -> None:
+        """Deprecated - functionality moved to remove_selected dialog"""
+        self.remove_selected()
 
     def set_custom_period(self) -> None:
         pop = tk.Toplevel(self.root)
@@ -680,7 +758,6 @@ class StockTrackerApp:
                     raise ValueError
                 CONFIG.custom_period_days = days
                 
-                # Update header label for 1-month swing
                 self.header_labels[5].config(text=f"{days} Day %")
                 
                 pop.destroy()
@@ -748,7 +825,7 @@ class StockTrackerApp:
         if os.path.exists(full):
             self.current_tickers = load_ticker_list(full)
             self.current_list_name = full
-            self.stock_data.clear() # Clear data to force a re-fetch
+            self.stock_data.clear()
             self._update_list_display()
             self.list_name_lbl.config(text=name)
             self.unsaved_changes = False
@@ -773,7 +850,6 @@ class StockTrackerApp:
             messagebox.showinfo("No Default", "No default list is set.")
             
     def show_info_popup(self, event=None) -> None:
-        """Shows a popup with explanations of the metrics."""
         info_text = (
             "Stock Tracker Metrics Explained:\n\n"
             "Recommendation: Derived from comparing the current price to the 50-day moving average (MA) "
@@ -797,7 +873,6 @@ class StockTrackerApp:
         tk.Button(pop, text="Close", command=pop.destroy, bg=self.theme["button"], fg=self.theme["text"]).pack(pady=5)
         
     def show_details_popup(self, ticker: str) -> None:
-        """Shows a detailed popup for the selected stock."""
         data = next((d for d in self.stock_data if d["ticker"] == ticker), None)
         if not data:
             messagebox.showerror("Error", f"No data found for {ticker}.")
@@ -809,7 +884,6 @@ class StockTrackerApp:
         pop.transient(self.root)
         pop.grab_set()
 
-        # Build detailed information string
         info = data['info']
         metrics = data['metrics']
         
@@ -918,7 +992,7 @@ class StockTrackerApp:
 
     def fetch_and_display(self) -> None:
         if not self.current_tickers:
-            messagebox.showinfo("No Tickers", "Add tickers to track using the field above.")
+            messagebox.showinfo("No Tickers", "Add tickers to track using the Search & Add button.")
             return
 
         self.status_lbl.config(text="Fetching data...")
@@ -926,7 +1000,6 @@ class StockTrackerApp:
         for btn in self.button_refs.values():
             btn.config(state=tk.DISABLED)
 
-        # Use a ThreadPoolExecutor for concurrent fetching
         new_data: List[Dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=CONFIG.max_threads) as executor:
             future_to_ticker = {
