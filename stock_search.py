@@ -7,19 +7,19 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Optional, Dict, Callable, List
 import yfinance as yf
-# Re-import yfinance as yf for use of yf.Search
+
 
 class StockSearchDialog:
     """Dialog for searching and previewing stock information."""
     
-    def __init__(self, parent: tk.Tk, theme: Dict[str, str], on_add_callback: Callable[[str], None]):
+    def __init__(self, parent: tk.Tk, theme: Dict[str, str], on_add_callback: Callable[[str], bool]):
         """
         Initialize the stock search dialog.
         
         Args:
             parent: Parent Tkinter window
             theme: Theme dictionary with color settings
-            on_add_callback: Callback function to add ticker to main tracker
+            on_add_callback: Callback function to add ticker to main tracker (returns bool)
         """
         self.parent = parent
         self.theme = theme
@@ -455,9 +455,9 @@ class StockSearchDialog:
         self.results_text.insert(tk.END, "Please check the ticker symbol and try again.\n")
         self.results_text.insert(tk.END, "Make sure to include the correct exchange suffix if needed.\n")
         self.results_text.insert(tk.END, "\nExamples:\n")
-        self.results_text.insert(tk.END, "  - US stocks: AAPL, MSFT, GOOGL\n")
-        self.results_text.insert(tk.END, "  - Swedish stocks: ERIC-B.ST, VOLV-B.ST\n")
-        self.results_text.insert(tk.END, "  - UK stocks: BP.L, HSBA.L\n")
+        self.results_text.insert(tk.END, "  - US stocks: AAPL, MSFT, GOOGL\n")
+        self.results_text.insert(tk.END, "  - Swedish stocks: ERIC-B.ST, VOLV-B.ST\n")
+        self.results_text.insert(tk.END, "  - UK stocks: BP.L, HSBA.L\n")
         self.results_text.config(state=tk.DISABLED)
         self.current_stock_data = None
     
@@ -468,10 +468,13 @@ class StockSearchDialog:
         
         ticker = self.current_stock_data['ticker']
         
-        # Call the callback to add to main tracker
-        self.on_add_callback(ticker)
+        # Call the callback to add to main tracker - returns True if added, False if duplicate
+        success = self.on_add_callback(ticker)
         
-        # Show confirmation
+        if not success:  # If duplicate, don't show success message
+            return
+        
+        # Show confirmation only if successfully added
         messagebox.showinfo(
             "Added",
             f"'{ticker}' has been added to your tracker!\n\n"
@@ -496,14 +499,14 @@ class StockSearchDialog:
 
 
 def open_stock_search(parent: tk.Tk, theme: Dict[str, str], 
-                      on_add_callback: Callable[[str], None]) -> None:
+                      on_add_callback: Callable[[str], bool]) -> None:
     """
     Open the stock search dialog.
     
     Args:
         parent: Parent Tkinter window
         theme: Theme dictionary with color settings
-        on_add_callback: Callback function to add ticker to main tracker
+        on_add_callback: Callback function to add ticker to main tracker (returns bool)
     """
     StockSearchDialog(parent, theme, on_add_callback)
 
