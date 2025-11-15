@@ -1,6 +1,6 @@
 Requirements:
 
-Python 3.13 Installed
+Python 3.13 or later Installed
 
 jsonschema installed
 
