@@ -36,8 +36,9 @@ class AppConfig:
     price_swing_threshold: float = 5.0  # Minimum % change to flag in reasons
     custom_period_days: int = 30  # Default lookback period for historical analysis
     trading_aggression: float = 0.5  # 0.0 = conservative, 1.0 = aggressive
+    recommendation_mode: str = "simple"  # "simple" or "complex"
 
-    # Base thresholds for generating buy/sell recommendations (adjusted by aggression)
+    # Thresholds for generating buy/sell recommendations (simple mode)
     recommendation_thresholds: Dict[str, float] = field(default_factory=lambda: {
         "buy_ma_ratio": 0.97,  # Buy if price < 97% of 50-day MA
         "consider_buy_ma_ratio": 0.99,  # Consider buying if price < 99% of 50-day MA
@@ -48,6 +49,16 @@ class AppConfig:
         "rsi_oversold": 30,  # RSI threshold for oversold condition
         "macd_buy": 0,  # MACD crossover buy signal threshold
         "macd_sell": 0,  # MACD crossover sell signal threshold
+    })
+    
+    # Weight factors for complex scoring system
+    score_weights: Dict[str, float] = field(default_factory=lambda: {
+        "ma_position": 0.25,      # Weight for 50-day MA position
+        "high_position": 0.20,    # Weight for 52-week high position
+        "rsi": 0.20,              # Weight for RSI indicator
+        "macd": 0.15,             # Weight for MACD momentum
+        "pe_ratio": 0.10,         # Weight for P/E valuation
+        "analyst_target": 0.10,   # Weight for analyst price target
     })
 
     # Toggle individual metrics on/off
@@ -121,35 +132,37 @@ def log_and_show(title: str, message: str, func_name: str, ticker: Optional[str]
     getattr(messagebox, f"show{msg_type}")(title, message)
 
 
-def load_ticker_list(filename: str) -> Tuple[List[str], float, int]:
+def load_ticker_list(filename: str) -> Tuple[List[str], float, int, str]:
     """Load a list of ticker symbols from a JSON file.
     
     Args:
         filename: Path to the JSON file containing ticker list
         
     Returns:
-        Tuple of (list of ticker symbols, trading aggression value, custom period days)
+        Tuple of (list of ticker symbols, trading aggression value, custom period days, recommendation mode)
     """
     if not os.path.exists(filename):
-        return [], 0.5, 30
+        return [], 0.5, 30, "simple"
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
         
         # Handle both old format (list) and new format (dict with tickers and aggression)
         if isinstance(data, list):
-            return [str(t).strip().upper() for t in data if str(t).strip()], 0.5, 30
+            return [str(t).strip().upper() for t in data if str(t).strip()], 0.5, 30, "simple"
         else:
             tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
             aggression = data.get("trading_aggression", 0.5)
             custom_period = data.get("custom_period_days", 30)
-            return tickers, aggression, custom_period
+            rec_mode = data.get("recommendation_mode", "simple")
+            return tickers, aggression, custom_period, rec_mode
     except Exception as e:
         log_and_show("Load Error", f"Failed to load ticker list: {e}", "load_ticker_list", msg_type="warning")
-        return [], 0.5, 30
+        return [], 0.5, 30, "simple"
 
 
-def save_ticker_list(filename: str, tickers: List[str], aggression: float = 0.5, custom_period_days: int = 30) -> None:
+def save_ticker_list(filename: str, tickers: List[str], aggression: float = 0.5, 
+                     custom_period_days: int = 30, recommendation_mode: str = "simple") -> None:
     """Save a list of ticker symbols to a JSON file.
     
     Args:
@@ -157,12 +170,14 @@ def save_ticker_list(filename: str, tickers: List[str], aggression: float = 0.5,
         tickers: List of ticker symbols to save
         aggression: Trading aggression level (0.0 to 1.0)
         custom_period_days: Custom lookback period in days
+        recommendation_mode: Recommendation system mode ("simple" or "complex")
     """
     try:
         data = {
             "tickers": tickers,
             "trading_aggression": aggression,
-            "custom_period_days": custom_period_days
+            "custom_period_days": custom_period_days,
+            "recommendation_mode": recommendation_mode
         }
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -400,6 +415,7 @@ class StockTrackerApp:
         self.filter_query: str = ""  # Current filter/search query
         self.trading_aggression: float = 0.5  # Trading aggression level (0.0-1.0)
         self.last_updated: Optional[str] = None  # Timestamp of last data fetch
+        self.recommendation_mode: str = "simple"  # Recommendation mode: "simple" or "complex"
 
         # Sorting state
         self._sort_column: str = "Recommendation"
@@ -455,6 +471,25 @@ class StockTrackerApp:
                 value=style_name,
                 command=lambda v=aggr_value, n=style_name: self.set_trading_style(v, n)
             )
+        
+        # Add separator and recommendation mode submenu
+        trading_style_menu.add_separator()
+        rec_mode_menu = tk.Menu(trading_style_menu, tearoff=0)
+        trading_style_menu.add_cascade(label="Recommendation System", menu=rec_mode_menu)
+        
+        self.rec_mode_var = tk.StringVar(value="simple")
+        rec_mode_menu.add_radiobutton(
+            label="Simple (Legacy)",
+            variable=self.rec_mode_var,
+            value="simple",
+            command=lambda: self.set_recommendation_mode("simple")
+        )
+        rec_mode_menu.add_radiobutton(
+            label="Complex (Multi-Factor Scoring)",
+            variable=self.rec_mode_var,
+            value="complex",
+            command=lambda: self.set_recommendation_mode("complex")
+        )
 
         # Period menu - configure lookback period
         period_menu = tk.Menu(menubar, tearoff=0)
@@ -611,6 +646,26 @@ class StockTrackerApp:
         )
         self.last_updated_lbl.pack(pady=(0, 5))
 
+    def set_recommendation_mode(self, mode: str) -> None:
+        """Set recommendation system mode (simple or complex).
+        
+        Args:
+            mode: "simple" for legacy recommendations, "complex" for multi-factor scoring
+        """
+        self.recommendation_mode = mode
+        self.rec_mode_var.set(mode)
+        self.unsaved_changes = True
+        
+        mode_display = "Simple (Legacy)" if mode == "simple" else "Complex (Multi-Factor Scoring)"
+        
+        # If we have stock data, automatically fetch to update recommendations
+        if self.stock_data and self.current_tickers:
+            self.status_lbl.config(text=f"Recommendation system changed to {mode_display} - Updating...")
+            self.root.update_idletasks()
+            self.fetch_and_display()
+        else:
+            self.status_lbl.config(text=f"Recommendation system set to {mode_display}")
+
     def set_trading_style(self, aggression: float, style_name: str) -> None:
         """Set trading style from menu and update recommendations.
         
@@ -651,10 +706,10 @@ class StockTrackerApp:
             return "Very Aggressive"
     
     def _on_aggression_change(self, value: str) -> None:
-        """Handle trading aggression slider change - DEPRECATED, kept for compatibility.
+        """Handle trading aggression change - DEPRECATED, kept for compatibility.
         
         Args:
-            value: New slider value as string
+            value: New value as string
         """
         pass
 
@@ -1192,7 +1247,8 @@ class StockTrackerApp:
         if not self.current_list_name:
             self.save_list_as()
             return
-        save_ticker_list(self.current_list_name, self.current_tickers, self.trading_aggression, CONFIG.custom_period_days)
+        save_ticker_list(self.current_list_name, self.current_tickers, self.trading_aggression, 
+                        CONFIG.custom_period_days, self.recommendation_mode)
         self.unsaved_changes = False
         messagebox.showinfo("Saved", f"List saved as '{os.path.basename(self.current_list_name)}'")
 
@@ -1203,7 +1259,8 @@ class StockTrackerApp:
             defaultextension=".json", filetypes=[("JSON files", "*.json")]
         )
         if fn:
-            save_ticker_list(fn, self.current_tickers, self.trading_aggression, CONFIG.custom_period_days)
+            save_ticker_list(fn, self.current_tickers, self.trading_aggression, 
+                           CONFIG.custom_period_days, self.recommendation_mode)
             self.current_list_name = fn
             self.list_name_lbl.config(text=os.path.basename(fn))
             self.unsaved_changes = False
@@ -1217,14 +1274,16 @@ class StockTrackerApp:
             filetypes=[("JSON files", "*.json")]
         )
         if fn:
-            self.current_tickers, self.trading_aggression, custom_period = load_ticker_list(fn)
+            self.current_tickers, self.trading_aggression, custom_period, rec_mode = load_ticker_list(fn)
             CONFIG.custom_period_days = custom_period
+            self.recommendation_mode = rec_mode
             
             # Update header label with loaded period
             self.header_labels[5].config(text=f"{custom_period} Day %")
             
             style_name = self._get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
+            self.rec_mode_var.set(rec_mode)
             self.current_list_name = fn
             self.stock_data.clear()
             self._update_list_display()
@@ -1244,14 +1303,16 @@ class StockTrackerApp:
             name = f.read().strip()
         full = os.path.join(CONFIG.lists_dir, name)
         if os.path.exists(full):
-            self.current_tickers, self.trading_aggression, custom_period = load_ticker_list(full)
+            self.current_tickers, self.trading_aggression, custom_period, rec_mode = load_ticker_list(full)
             CONFIG.custom_period_days = custom_period
+            self.recommendation_mode = rec_mode
             
             # Update header label with loaded period
             self.header_labels[5].config(text=f"{custom_period} Day %")
             
             style_name = self._get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
+            self.rec_mode_var.set(rec_mode)
             self.current_list_name = full
             self.stock_data.clear()
             self._update_list_display()
@@ -1283,16 +1344,32 @@ class StockTrackerApp:
         """Display a popup explaining all metrics and recommendations."""
         info_text = (
             "Stock Tracker Metrics Explained:\n\n"
-            "Trading Style Slider: Adjusts how aggressively the system recommends trades.\n"
-            "  • Conservative (left): Requires larger price movements before recommending trades.\n"
-            "    Waits for stocks to be well below moving averages before buying, and well above\n"
-            "    highs before selling. Good for long-term investors who want fewer transactions.\n"
-            "  • Moderate (center): Balanced approach with standard thresholds.\n"
-            "  • Aggressive (right): Recommends trades with smaller price movements, acting more\n"
-            "    like day trading. Generates more buy/sell signals for active traders.\n"
-            "  The slider setting is saved with your ticker list.\n\n"
-            "Recommendation: Derived from comparing the current price to the 50-day moving average (MA) "
-            "and the 52-week high, adjusted by your trading style setting.\n\n"
+            "=== RECOMMENDATION SYSTEMS ===\n\n"
+            "Simple (Legacy) Mode:\n"
+            "  • Uses traditional threshold-based logic\n"
+            "  • Compares price to 50-day MA and 52-week high\n"
+            "  • Binary decision: Buy, Consider Buying, Hold, Consider Selling, Sell\n"
+            "  • Good for straightforward, rule-based trading\n\n"
+            "Complex (Multi-Factor Scoring) Mode:\n"
+            "  • Advanced system that evaluates 6 weighted factors:\n"
+            "    1. MA Position (25%): Distance from 50-day moving average\n"
+            "    2. 52W Range (20%): Position in 52-week high/low range\n"
+            "    3. RSI (20%): Momentum indicator for overbought/oversold\n"
+            "    4. MACD (15%): Trend momentum strength\n"
+            "    5. P/E Ratio (10%): Valuation metric\n"
+            "    6. Analyst Target (10%): Professional price targets\n"
+            "  • Generates score from -100 (strong sell) to +100 (strong buy)\n"
+            "  • Considers multiple factors simultaneously for holistic view\n"
+            "  • Score thresholds adjust based on trading aggression setting\n"
+            "  • More nuanced than simple mode, considers full picture\n\n"
+            "=== TRADING STYLE ===\n\n"
+            "Trading Style: Adjusts recommendation sensitivity.\n"
+            "  • Conservative: Requires larger price movements, fewer trades\n"
+            "    Wider margins before recommending buy/sell\n"
+            "  • Moderate: Balanced approach with standard thresholds\n"
+            "  • Aggressive: Tighter thresholds, more frequent trading signals\n"
+            "    Acts more like day trading with smaller movements\n\n"
+            "=== METRICS ===\n\n"
             "Price: Current trading price of the stock.\n\n"
             "Volume: Number of shares traded. Important because:\n"
             "  • High volume = Strong interest and liquidity (easier to buy/sell)\n"
@@ -1304,18 +1381,28 @@ class StockTrackerApp:
             "  • Moderate P/E (15-30): Fair valuation\n"
             "  • High P/E (> 30): Potentially overvalued, expensive relative to earnings\n"
             "  Note: Growth stocks often have higher P/E ratios\n\n"
-            "Target %: Percentage difference between the Analyst Mean Target Price and the current price.\n\n"
-            "RSI: Relative Strength Index (14-day). Thresholds adjust with trading style:\n"
+            "Target %: Percentage difference between the Analyst Mean Target Price and current price.\n\n"
+            "RSI: Relative Strength Index (14-day). Momentum oscillator:\n"
+            "  Thresholds adjust with trading style:\n"
             "  Conservative: >75 Overbought, <25 Oversold\n"
             "  Aggressive: >65 Overbought, <35 Oversold\n\n"
-            "MACD: Moving Average Convergence Divergence (12/26 periods). Helps identify momentum and trend direction.\n\n"
+            "MACD: Moving Average Convergence Divergence (12/26/9 periods).\n"
+            "  Helps identify momentum and trend direction.\n"
+            "  Positive values suggest upward momentum, negative suggest downward.\n\n"
             "Day %: Price swing percentage for 1 day and the custom period (currently set to "
-            f"{CONFIG.custom_period_days} days)."
+            f"{CONFIG.custom_period_days} days).\n\n"
+            "Score (Complex Mode Only): Overall score from -100 to +100\n"
+            "  • +100 to +30: Strong to moderate buy signals\n"
+            "  • +30 to +15: Consider buying zone\n"
+            "  • +15 to -15: Hold zone (neutral)\n"
+            "  • -15 to -30: Consider selling zone\n"
+            "  • -30 to -100: Moderate to strong sell signals\n"
+            "  Thresholds adjust based on your trading aggression setting."
         )
 
         pop = tk.Toplevel(self.root)
         pop.title("Stock Tracker Metric Info")
-        pop.geometry("800x600")
+        pop.geometry("900x700")
         pop.configure(bg=self.theme["background"])
         pop.transient(self.root)
         pop.grab_set()
@@ -1370,7 +1457,13 @@ class StockTrackerApp:
         # Build formatted detail text
         detail_text = f"Ticker: {ticker}\n"
         detail_text += f"Name: {data['name']}\n"
-        detail_text += f"Recommendation: {data['recommendation']} ({', '.join(data['reasons'])})\n"
+        detail_text += f"Recommendation: {data['recommendation']}"
+        
+        # Add score if in complex mode
+        if self.recommendation_mode == "complex" and metrics.get("Score") is not None:
+            detail_text += f" (Score: {metrics['Score']:+.1f})"
+        
+        detail_text += f"\nReasons: {', '.join(data['reasons']) if data['reasons'] else 'None'}\n"
         detail_text += f"Sector/Industry: {data['sector']} / {data['industry']}\n"
         detail_text += "--- Price & Performance ---\n"
         detail_text += f"Current Price: {info.get('regularMarketPrice', 'N/A'):.2f}\n"
@@ -1417,7 +1510,7 @@ class StockTrackerApp:
         """Fetch and analyze data for a single stock ticker.
         
         Downloads historical data, calculates metrics, and generates recommendations
-        based on configured thresholds.
+        based on configured thresholds and selected recommendation mode.
         
         Args:
             ticker: Stock ticker symbol to fetch
@@ -1441,21 +1534,11 @@ class StockTrackerApp:
             industry = info.get("industry", "N/A")
             price = info.get("regularMarketPrice")
 
-            # Initialize recommendation logic
-            rec = "Hold"
-            reasons: List[str] = []
-            
-            # Get adjusted thresholds based on trading aggression
-            thresholds = self._get_adjusted_thresholds()
-
             # Calculate 1-day price swing
             swing_1d: Optional[float] = None
             if not hist_1d.empty and len(hist_1d) >= 2:
                 close = hist_1d["Close"]
                 swing_1d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-                # Flag significant swings in reasons
-                if swing_1d is not None and abs(swing_1d) >= CONFIG.price_swing_threshold:
-                    reasons.append(f"1-day {swing_1d:+.2f}%")
 
             # Calculate custom period price swing
             swing_1m: Optional[float] = None
@@ -1463,27 +1546,7 @@ class StockTrackerApp:
                 close = hist_long["Close"]
                 swing_1m = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-            # Recommendation based on 50-day moving average
-            if price and "fiftyDayAverage" in info:
-                ma = info["fiftyDayAverage"]
-                if price < ma * thresholds["buy_ma_ratio"]:
-                    rec = "Buy"
-                    reasons.append("Below 50-day MA")
-                elif price < ma * thresholds["consider_buy_ma_ratio"]:
-                    rec = "Consider Buying"
-                    reasons.append("Near 50-day MA")
-
-            # Recommendation based on 52-week high
-            if price and "fiftyTwoWeekHigh" in info:
-                high = info["fiftyTwoWeekHigh"]
-                if price > high * thresholds["sell_high_ratio"]:
-                    rec = "Sell"
-                    reasons.append("Near 52-week high")
-                elif price > high * thresholds["consider_sell_high_ratio"] and rec == "Hold":
-                    rec = "Consider Selling"
-                    reasons.append("Approaching high")
-
-            # Calculate optional metrics based on configuration
+            # Calculate metrics
             metrics: Dict[str, Any] = {}
             if CONFIG.enable_metrics["pe_ratio"]:
                 metrics["P/E"] = registry.compute("pe_ratio", info)[0]
@@ -1492,17 +1555,22 @@ class StockTrackerApp:
                 metrics["Target"] = tgt
                 metrics["Target %"] = diff
             if CONFIG.enable_metrics["rsi"]:
-                rsi, flag = registry.compute("rsi", hist_long)
+                rsi, _ = registry.compute("rsi", hist_long)
                 metrics["RSI"] = rsi
-                if flag and rsi is not None:
-                    # Apply adjusted RSI thresholds
-                    if rsi > thresholds["rsi_overbought"]:
-                        reasons.append("Overbought")
-                    elif rsi < thresholds["rsi_oversold"]:
-                        reasons.append("Oversold")
             if CONFIG.enable_metrics["macd"]:
                 macd, _ = registry.compute("macd", hist_long)
                 metrics["MACD"] = macd
+
+            # Generate recommendation based on selected mode
+            if self.recommendation_mode == "complex":
+                rec, reasons, score = self._calculate_complex_recommendation(
+                    info, price, hist_long, metrics, swing_1d
+                )
+                metrics["Score"] = score
+            else:
+                rec, reasons = self._calculate_simple_recommendation(
+                    info, price, hist_long, metrics, swing_1d
+                )
 
             return {
                 "ticker": ticker, "name": name, "sector": sector, "industry": industry,
@@ -1519,6 +1587,196 @@ class StockTrackerApp:
                 "info": {}, "recommendation": "Hold", "reasons": [], "metrics": {},
                 "price_swing_1d": "N/A", "price_swing_1m": "N/A"
             }
+
+    def _calculate_simple_recommendation(self, info: dict, price: float, hist_long: pd.DataFrame,
+                                        metrics: Dict[str, Any], swing_1d: Optional[float]) -> Tuple[str, List[str]]:
+        """Calculate recommendation using simple legacy logic.
+        
+        Args:
+            info: Stock info dictionary
+            price: Current stock price
+            hist_long: Historical price data
+            metrics: Calculated metrics dictionary
+            swing_1d: 1-day price swing percentage
+            
+        Returns:
+            Tuple of (recommendation, list of reasons)
+        """
+        rec = "Hold"
+        reasons: List[str] = []
+        
+        # Get adjusted thresholds based on trading aggression
+        thresholds = self._get_adjusted_thresholds()
+
+        # Flag significant swings in reasons
+        if swing_1d is not None and abs(swing_1d) >= CONFIG.price_swing_threshold:
+            reasons.append(f"1-day {swing_1d:+.2f}%")
+
+        # Recommendation based on 50-day moving average
+        if price and "fiftyDayAverage" in info:
+            ma = info["fiftyDayAverage"]
+            if price < ma * thresholds["buy_ma_ratio"]:
+                rec = "Buy"
+                reasons.append("Below 50-day MA")
+            elif price < ma * thresholds["consider_buy_ma_ratio"]:
+                rec = "Consider Buying"
+                reasons.append("Near 50-day MA")
+
+        # Recommendation based on 52-week high
+        if price and "fiftyTwoWeekHigh" in info:
+            high = info["fiftyTwoWeekHigh"]
+            if price > high * thresholds["sell_high_ratio"]:
+                rec = "Sell"
+                reasons.append("Near 52-week high")
+            elif price > high * thresholds["consider_sell_high_ratio"] and rec == "Hold":
+                rec = "Consider Selling"
+                reasons.append("Approaching high")
+
+        # Apply adjusted RSI thresholds
+        rsi = metrics.get("RSI")
+        if rsi is not None:
+            if rsi > thresholds["rsi_overbought"]:
+                reasons.append("Overbought")
+            elif rsi < thresholds["rsi_oversold"]:
+                reasons.append("Oversold")
+                
+        return rec, reasons
+
+    def _calculate_complex_recommendation(self, info: dict, price: float, hist_long: pd.DataFrame,
+                                         metrics: Dict[str, Any], swing_1d: Optional[float]) -> Tuple[str, List[str], float]:
+        """Calculate recommendation using complex multi-factor scoring system.
+        
+        Scores range from -100 (strong sell) to +100 (strong buy).
+        Each factor is weighted and normalized to contribute to the final score.
+        
+        Args:
+            info: Stock info dictionary
+            price: Current stock price
+            hist_long: Historical price data
+            metrics: Calculated metrics dictionary
+            swing_1d: 1-day price swing percentage
+            
+        Returns:
+            Tuple of (recommendation, list of reasons, overall score)
+        """
+        reasons: List[str] = []
+        total_score = 0.0
+        weights = CONFIG.score_weights
+        thresholds = self._get_adjusted_thresholds()
+        
+        # Factor 1: 50-Day Moving Average Position (-100 to +100)
+        if price and "fiftyDayAverage" in info:
+            ma = info["fiftyDayAverage"]
+            ma_ratio = (price / ma - 1) * 100  # Percentage from MA
+            # Score: positive when below MA (buy signal), negative when above (sell signal)
+            ma_score = max(-100, min(100, -ma_ratio * 5))  # Scale to -100/+100
+            total_score += ma_score * weights["ma_position"]
+            
+            if ma_ratio < -3:
+                reasons.append(f"Below MA ({ma_ratio:.1f}%)")
+            elif ma_ratio > 2:
+                reasons.append(f"Above MA (+{ma_ratio:.1f}%)")
+        
+        # Factor 2: 52-Week High Position (-100 to +100)
+        if price and "fiftyTwoWeekHigh" in info and "fiftyTwoWeekLow" in info:
+            high = info["fiftyTwoWeekHigh"]
+            low = info["fiftyTwoWeekLow"]
+            if high > low:
+                # Position in 52-week range (0 = at low, 100 = at high)
+                range_position = ((price - low) / (high - low)) * 100
+                # Score: positive when low (undervalued), negative when high (overvalued)
+                high_score = 100 - (range_position * 2)  # 0% = +100, 100% = -100
+                total_score += high_score * weights["high_position"]
+                
+                if range_position > 90:
+                    reasons.append(f"Near 52W high ({range_position:.0f}%)")
+                elif range_position < 20:
+                    reasons.append(f"Near 52W low ({range_position:.0f}%)")
+        
+        # Factor 3: RSI Indicator (-100 to +100)
+        rsi = metrics.get("RSI")
+        if rsi is not None:
+            # Score: positive when oversold, negative when overbought
+            if rsi > 50:
+                rsi_score = -(rsi - 50) * 2  # 50-100 maps to 0 to -100
+            else:
+                rsi_score = (50 - rsi) * 2   # 0-50 maps to +100 to 0
+            total_score += rsi_score * weights["rsi"]
+            
+            if rsi > thresholds["rsi_overbought"]:
+                reasons.append(f"Overbought (RSI {rsi:.0f})")
+            elif rsi < thresholds["rsi_oversold"]:
+                reasons.append(f"Oversold (RSI {rsi:.0f})")
+        
+        # Factor 4: MACD Momentum (-100 to +100)
+        macd = metrics.get("MACD")
+        if macd is not None:
+            # Normalize MACD to -100/+100 range (assuming typical MACD values -5 to +5)
+            macd_score = max(-100, min(100, macd * 20))
+            total_score += macd_score * weights["macd"]
+            
+            if macd > 0.5:
+                reasons.append(f"Positive momentum (MACD {macd:+.2f})")
+            elif macd < -0.5:
+                reasons.append(f"Negative momentum (MACD {macd:+.2f})")
+        
+        # Factor 5: P/E Ratio Valuation (-100 to +100)
+        pe = metrics.get("P/E")
+        if pe and pe > 0:
+            # Score: positive when low P/E (undervalued), negative when high (overvalued)
+            # Typical P/E: 0-50, optimal around 15
+            if pe < 15:
+                pe_score = 50  # Undervalued
+            elif pe > 30:
+                pe_score = -50  # Overvalued
+            else:
+                pe_score = 50 - ((pe - 15) / 15 * 100)  # Linear between 15-30
+            total_score += pe_score * weights["pe_ratio"]
+            
+            if pe > 30:
+                reasons.append(f"High P/E ({pe:.1f})")
+            elif pe < 10:
+                reasons.append(f"Low P/E ({pe:.1f})")
+        
+        # Factor 6: Analyst Target Price (-100 to +100)
+        target_pct = metrics.get("Target %")
+        if target_pct is not None:
+            # Score: positive when price below target (upside), negative when above (downside)
+            target_score = max(-100, min(100, target_pct * 2))  # Scale to -100/+100
+            total_score += target_score * weights["analyst_target"]
+            
+            if target_pct > 10:
+                reasons.append(f"Upside potential ({target_pct:+.0f}%)")
+            elif target_pct < -10:
+                reasons.append(f"Downside risk ({target_pct:+.0f}%)")
+        
+        # Add price swing to reasons if significant
+        if swing_1d is not None and abs(swing_1d) >= CONFIG.price_swing_threshold:
+            reasons.append(f"1-day {swing_1d:+.2f}%")
+        
+        # Adjust score based on trading aggression
+        aggression_multiplier = 0.5 + (self.trading_aggression * 0.5)  # 0.5 to 1.0
+        adjusted_score = total_score * aggression_multiplier
+        
+        # Convert score to recommendation
+        # Aggressive: tighter thresholds, Conservative: wider thresholds
+        buy_threshold = 30 - (self.trading_aggression * 20)  # 30 to 10
+        consider_buy_threshold = 15 - (self.trading_aggression * 10)  # 15 to 5
+        sell_threshold = -30 + (self.trading_aggression * 20)  # -30 to -10
+        consider_sell_threshold = -15 + (self.trading_aggression * 10)  # -15 to -5
+        
+        if adjusted_score >= buy_threshold:
+            rec = "Buy"
+        elif adjusted_score >= consider_buy_threshold:
+            rec = "Consider Buying"
+        elif adjusted_score <= sell_threshold:
+            rec = "Sell"
+        elif adjusted_score <= consider_sell_threshold:
+            rec = "Consider Selling"
+        else:
+            rec = "Hold"
+        
+        return rec, reasons, round(adjusted_score, 1)
 
     def fetch_and_display(self) -> None:
         """Fetch data for all tickers and update the display.
