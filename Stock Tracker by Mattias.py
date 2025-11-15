@@ -35,8 +35,9 @@ class AppConfig:
     max_threads: int = 3  # Number of concurrent threads for fetching stock data
     price_swing_threshold: float = 5.0  # Minimum % change to flag in reasons
     custom_period_days: int = 30  # Default lookback period for historical analysis
+    trading_aggression: float = 0.5  # 0.0 = conservative, 1.0 = aggressive
 
-    # Thresholds for generating buy/sell recommendations
+    # Base thresholds for generating buy/sell recommendations (adjusted by aggression)
     recommendation_thresholds: Dict[str, float] = field(default_factory=lambda: {
         "buy_ma_ratio": 0.97,  # Buy if price < 97% of 50-day MA
         "consider_buy_ma_ratio": 0.99,  # Consider buying if price < 99% of 50-day MA
@@ -120,36 +121,51 @@ def log_and_show(title: str, message: str, func_name: str, ticker: Optional[str]
     getattr(messagebox, f"show{msg_type}")(title, message)
 
 
-def load_ticker_list(filename: str) -> List[str]:
+def load_ticker_list(filename: str) -> Tuple[List[str], float, int]:
     """Load a list of ticker symbols from a JSON file.
     
     Args:
         filename: Path to the JSON file containing ticker list
         
     Returns:
-        List of ticker symbols (uppercase, stripped)
+        Tuple of (list of ticker symbols, trading aggression value, custom period days)
     """
     if not os.path.exists(filename):
-        return []
+        return [], 0.5, 30
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return [str(t).strip().upper() for t in data if str(t).strip()]
+        
+        # Handle both old format (list) and new format (dict with tickers and aggression)
+        if isinstance(data, list):
+            return [str(t).strip().upper() for t in data if str(t).strip()], 0.5, 30
+        else:
+            tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+            aggression = data.get("trading_aggression", 0.5)
+            custom_period = data.get("custom_period_days", 30)
+            return tickers, aggression, custom_period
     except Exception as e:
         log_and_show("Load Error", f"Failed to load ticker list: {e}", "load_ticker_list", msg_type="warning")
-        return []
+        return [], 0.5, 30
 
 
-def save_ticker_list(filename: str, tickers: List[str]) -> None:
+def save_ticker_list(filename: str, tickers: List[str], aggression: float = 0.5, custom_period_days: int = 30) -> None:
     """Save a list of ticker symbols to a JSON file.
     
     Args:
         filename: Path where the JSON file should be saved
         tickers: List of ticker symbols to save
+        aggression: Trading aggression level (0.0 to 1.0)
+        custom_period_days: Custom lookback period in days
     """
     try:
+        data = {
+            "tickers": tickers,
+            "trading_aggression": aggression,
+            "custom_period_days": custom_period_days
+        }
         with open(filename, "w", encoding="utf-8") as f:
-            json.dump(tickers, f, indent=2)
+            json.dump(data, f, indent=2)
     except Exception as e:
         log_and_show("Save Error", f"Failed to save ticker list: {e}", "save_ticker_list")
 
@@ -382,6 +398,8 @@ class StockTrackerApp:
         self.current_list_name: str = ""  # Path to currently loaded list file
         self.unsaved_changes: bool = False  # Track if list has unsaved modifications
         self.filter_query: str = ""  # Current filter/search query
+        self.trading_aggression: float = 0.5  # Trading aggression level (0.0-1.0)
+        self.last_updated: Optional[str] = None  # Timestamp of last data fetch
 
         # Sorting state
         self._sort_column: str = "Recommendation"
@@ -399,23 +417,44 @@ class StockTrackerApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def _setup_menu(self) -> None:
-        """Create the menu bar with File, Period, and Help menus."""
+        """Create the menu bar with File, Trading Style, Period, and Help menus."""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
         # File menu - list management and export
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        file_menu.add_command(label="New", command=self.new_list)
-        file_menu.add_command(label="Open", command=self.open_dialog)
+        file_menu.add_command(label="New List", command=self.new_list)
+        file_menu.add_command(label="Open List", command=self.open_dialog)
         file_menu.add_separator()
-        file_menu.add_command(label="Save", command=self.save_current_list)
-        file_menu.add_command(label="Save as", command=self.save_list_as)
+        file_menu.add_command(label="Save List", command=self.save_current_list)
+        file_menu.add_command(label="Save List as", command=self.save_list_as)
         file_menu.add_separator()
         file_menu.add_command(label="Export Data As CSV", command=lambda: export_to_csv(self.stock_data))
         file_menu.add_separator()
-        file_menu.add_command(label="Set as Default", command=self.set_as_default)
-        file_menu.add_command(label="Remove Default", command=self.remove_default)
+        file_menu.add_command(label="Set List as Default", command=self.set_as_default)
+        file_menu.add_command(label="Remove Default List", command=self.remove_default)
+
+        # Trading Style menu
+        trading_style_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Trading Style", menu=trading_style_menu)
+        
+        self.trading_style_var = tk.StringVar(value="Moderate")
+        trading_styles = [
+            ("Very Conservative", 0.1),
+            ("Conservative", 0.3),
+            ("Moderate", 0.5),
+            ("Aggressive", 0.7),
+            ("Very Aggressive", 0.9)
+        ]
+        
+        for style_name, aggr_value in trading_styles:
+            trading_style_menu.add_radiobutton(
+                label=style_name,
+                variable=self.trading_style_var,
+                value=style_name,
+                command=lambda v=aggr_value, n=style_name: self.set_trading_style(v, n)
+            )
 
         # Period menu - configure lookback period
         period_menu = tk.Menu(menubar, tearoff=0)
@@ -450,6 +489,16 @@ class StockTrackerApp:
         )
         self.list_name_lbl.pack(side=tk.LEFT, padx=(5, 0))
 
+        # Fetch Data button (left side, prominent position)
+        fetch_frame = tk.Frame(top_frame, bg=self.theme["background"])
+        fetch_frame.pack(side=tk.LEFT, padx=(20, 0))
+        fetch_btn = tk.Button(
+            fetch_frame, text="Fetch Data", command=self.fetch_and_display,
+            bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
+        )
+        fetch_btn.pack()
+        self.button_refs["Fetch Data"] = fetch_btn
+
         # Add/Remove buttons
         add_frame = tk.Frame(top_frame, bg=self.theme["background"])
         add_frame.pack(side=tk.LEFT, padx=(20, 0))
@@ -476,17 +525,6 @@ class StockTrackerApp:
             search_frame, text="Filter", command=lambda: self.filter_list(self.search_entry.get()),
             bg=self.theme["button"], fg=self.theme["text"]
         ).pack(side=tk.LEFT, padx=5)
-
-        # Fetch Data button (right side)
-        action_frame = tk.Frame(top_frame, bg=self.theme["background"])
-        action_frame.pack(side=tk.RIGHT, padx=(20, 0))
-
-        fetch_btn = tk.Button(
-            action_frame, text="Fetch Data", command=self.fetch_and_display,
-            bg=self.theme["button"], fg=self.theme["text"], font=("Arial", 11, "bold"), width=15, height=1
-        )
-        fetch_btn.pack()
-        self.button_refs["Fetch Data"] = fetch_btn
 
         # Scrollable canvas for stock table
         table_container = tk.Frame(mgmt, bg=self.theme["background"])
@@ -524,10 +562,10 @@ class StockTrackerApp:
         headers = [
             "Ticker", "Name", "Recommendation", "Price",
             "1 Day %", f"{CONFIG.custom_period_days} Day %",
-            "Sector", "Industry", "P/E", "Target %", "RSI", "MACD"
+            "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD"
         ]
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 16, 10, 10, 12, 22, 25, 8, 10, 8, 10]
+        char_widths = [10, 30, 16, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         self.header_labels = []
         for i, (text, width) in enumerate(zip(headers, char_widths)):
@@ -564,7 +602,90 @@ class StockTrackerApp:
             self.root, text="Ready", bg=self.theme["background"],
             fg=self.theme["text"], font=("Arial", 10)
         )
-        self.status_lbl.pack(pady=(0, 5))
+        self.status_lbl.pack(pady=(0, 2))
+        
+        # Last updated label
+        self.last_updated_lbl = tk.Label(
+            self.root, text="", bg=self.theme["background"],
+            fg="#888888", font=("Arial", 8, "italic")
+        )
+        self.last_updated_lbl.pack(pady=(0, 5))
+
+    def set_trading_style(self, aggression: float, style_name: str) -> None:
+        """Set trading style from menu and update recommendations.
+        
+        Args:
+            aggression: Trading aggression value (0.0 to 1.0)
+            style_name: Display name of the trading style
+        """
+        self.trading_aggression = aggression
+        self.trading_style_var.set(style_name)
+        self.unsaved_changes = True
+        
+        # If we have stock data, automatically fetch to update recommendations
+        if self.stock_data and self.current_tickers:
+            self.status_lbl.config(text=f"Trading style changed to {style_name} - Updating recommendations...")
+            self.root.update_idletasks()
+            self.fetch_and_display()
+        else:
+            self.status_lbl.config(text=f"Trading style set to {style_name}")
+
+    def _get_aggression_label(self, aggression: float) -> str:
+        """Get descriptive label for aggression level.
+        
+        Args:
+            aggression: Trading aggression value (0.0 to 1.0)
+            
+        Returns:
+            Descriptive label string
+        """
+        if aggression <= 0.2:
+            return "Very Conservative"
+        elif aggression <= 0.4:
+            return "Conservative"
+        elif aggression <= 0.6:
+            return "Moderate"
+        elif aggression <= 0.8:
+            return "Aggressive"
+        else:
+            return "Very Aggressive"
+    
+    def _on_aggression_change(self, value: str) -> None:
+        """Handle trading aggression slider change - DEPRECATED, kept for compatibility.
+        
+        Args:
+            value: New slider value as string
+        """
+        pass
+
+    def _get_adjusted_thresholds(self) -> Dict[str, float]:
+        """Calculate adjusted recommendation thresholds based on trading aggression.
+        
+        Conservative (0.0): Fewer trades, wider margins
+        Aggressive (1.0): More trades, tighter margins
+        
+        Returns:
+            Dictionary of adjusted threshold values
+        """
+        aggr = self.trading_aggression
+        base = CONFIG.recommendation_thresholds.copy()
+        
+        # Adjust buy thresholds (lower aggression = wait for better deals)
+        # Conservative: 0.95, Moderate: 0.97, Aggressive: 0.99
+        base["buy_ma_ratio"] = 0.95 + (aggr * 0.04)
+        base["consider_buy_ma_ratio"] = 0.97 + (aggr * 0.04)
+        
+        # Adjust sell thresholds (lower aggression = hold longer)
+        # Conservative: 0.99, Moderate: 0.98, Aggressive: 0.96
+        base["sell_high_ratio"] = 0.99 - (aggr * 0.03)
+        base["consider_sell_high_ratio"] = 0.97 - (aggr * 0.04)
+        
+        # Adjust RSI thresholds (tighter ranges for aggressive trading)
+        # Conservative: 75/25, Moderate: 70/30, Aggressive: 65/35
+        base["rsi_overbought"] = 75 - (aggr * 10)
+        base["rsi_oversold"] = 25 + (aggr * 10)
+        
+        return base
         
     def filter_list(self, query: str) -> None:
         """Filter displayed stocks by ticker symbol or company name.
@@ -723,7 +844,7 @@ class StockTrackerApp:
         display_data.sort(key=lambda x: x[2]) 
 
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 16, 10, 10, 12, 22, 25, 8, 10, 8, 10]
+        char_widths = [10, 30, 16, 10, 12, 10, 12, 22, 25, 8, 10, 8, 10]
 
         # Create a row for each ticker
         for ticker, data, _ in display_data:
@@ -743,6 +864,20 @@ class StockTrackerApp:
 
             # Prepare values for all columns
             labels = []
+            
+            # Format volume for readability (K = thousands, M = millions, B = billions)
+            volume_str = ""
+            if data and data['info'].get('volume'):
+                vol = data['info'].get('volume')
+                if vol >= 1_000_000_000:
+                    volume_str = f"{vol/1_000_000_000:.2f}B"
+                elif vol >= 1_000_000:
+                    volume_str = f"{vol/1_000_000:.2f}M"
+                elif vol >= 1_000:
+                    volume_str = f"{vol/1_000:.2f}K"
+                else:
+                    volume_str = str(vol)
+            
             values = [
                 ticker,
                 data["name"] if data else "",
@@ -752,6 +887,7 @@ class StockTrackerApp:
                 data.get("price_swing_1m", "N/A") if data else "N/A",
                 data["sector"] if data else "",
                 data["industry"] if data else "",
+                volume_str,
                 f"{data['metrics'].get('P/E', ''):.1f}" if data and data['metrics'].get('P/E') else "",
                 f"{data['metrics'].get('Target %', ''):+.1f}%" if data and data['metrics'].get('Target %') else "",
                 f"{data['metrics'].get('RSI', ''):.1f}" if data and data['metrics'].get('RSI') else "",
@@ -1020,8 +1156,10 @@ class StockTrackerApp:
                 # Update header label with new period
                 self.header_labels[5].config(text=f"{days} Day %")
                 
+                # Mark as unsaved change
+                self.unsaved_changes = True
+                
                 pop.destroy()
-                messagebox.showinfo("Updated", f"Custom period set to {days} days.")
                 
                 # Refresh data if we have stocks loaded
                 if self.stock_data:
@@ -1040,6 +1178,8 @@ class StockTrackerApp:
         self.current_tickers.clear()
         self.stock_data.clear()
         self.current_list_name = ""
+        self.trading_aggression = 0.5
+        self.trading_style_var.set("Moderate")
         self._update_list_display()
         self.list_name_lbl.config(text="(none)")
         self.unsaved_changes = False
@@ -1052,7 +1192,7 @@ class StockTrackerApp:
         if not self.current_list_name:
             self.save_list_as()
             return
-        save_ticker_list(self.current_list_name, self.current_tickers)
+        save_ticker_list(self.current_list_name, self.current_tickers, self.trading_aggression, CONFIG.custom_period_days)
         self.unsaved_changes = False
         messagebox.showinfo("Saved", f"List saved as '{os.path.basename(self.current_list_name)}'")
 
@@ -1063,7 +1203,7 @@ class StockTrackerApp:
             defaultextension=".json", filetypes=[("JSON files", "*.json")]
         )
         if fn:
-            save_ticker_list(fn, self.current_tickers)
+            save_ticker_list(fn, self.current_tickers, self.trading_aggression, CONFIG.custom_period_days)
             self.current_list_name = fn
             self.list_name_lbl.config(text=os.path.basename(fn))
             self.unsaved_changes = False
@@ -1077,7 +1217,14 @@ class StockTrackerApp:
             filetypes=[("JSON files", "*.json")]
         )
         if fn:
-            self.current_tickers = load_ticker_list(fn)
+            self.current_tickers, self.trading_aggression, custom_period = load_ticker_list(fn)
+            CONFIG.custom_period_days = custom_period
+            
+            # Update header label with loaded period
+            self.header_labels[5].config(text=f"{custom_period} Day %")
+            
+            style_name = self._get_aggression_label(self.trading_aggression)
+            self.trading_style_var.set(style_name)
             self.current_list_name = fn
             self.stock_data.clear()
             self._update_list_display()
@@ -1097,7 +1244,14 @@ class StockTrackerApp:
             name = f.read().strip()
         full = os.path.join(CONFIG.lists_dir, name)
         if os.path.exists(full):
-            self.current_tickers = load_ticker_list(full)
+            self.current_tickers, self.trading_aggression, custom_period = load_ticker_list(full)
+            CONFIG.custom_period_days = custom_period
+            
+            # Update header label with loaded period
+            self.header_labels[5].config(text=f"{custom_period} Day %")
+            
+            style_name = self._get_aggression_label(self.trading_aggression)
+            self.trading_style_var.set(style_name)
             self.current_list_name = full
             self.stock_data.clear()
             self._update_list_display()
@@ -1129,24 +1283,65 @@ class StockTrackerApp:
         """Display a popup explaining all metrics and recommendations."""
         info_text = (
             "Stock Tracker Metrics Explained:\n\n"
+            "Trading Style Slider: Adjusts how aggressively the system recommends trades.\n"
+            "  • Conservative (left): Requires larger price movements before recommending trades.\n"
+            "    Waits for stocks to be well below moving averages before buying, and well above\n"
+            "    highs before selling. Good for long-term investors who want fewer transactions.\n"
+            "  • Moderate (center): Balanced approach with standard thresholds.\n"
+            "  • Aggressive (right): Recommends trades with smaller price movements, acting more\n"
+            "    like day trading. Generates more buy/sell signals for active traders.\n"
+            "  The slider setting is saved with your ticker list.\n\n"
             "Recommendation: Derived from comparing the current price to the 50-day moving average (MA) "
-            "and the 52-week high, with configurable thresholds.\n"
-            "P/E: Trailing Price-to-Earnings Ratio. High P/E (e.g., >30) may suggest overvaluation.\n"
-            "Target %: Percentage difference between the Analyst Mean Target Price and the current price.\n"
-            "RSI: Relative Strength Index (14-day). >70 is Overbought (potential sell), <30 is Oversold (potential buy).\n"
-            "MACD: Moving Average Convergence Divergence (12/26 periods). Helps identify momentum and trend direction.\n"
+            "and the 52-week high, adjusted by your trading style setting.\n\n"
+            "Price: Current trading price of the stock.\n\n"
+            "Volume: Number of shares traded. Important because:\n"
+            "  • High volume = Strong interest and liquidity (easier to buy/sell)\n"
+            "  • Low volume = Weak interest, harder to execute large trades\n"
+            "  • Unusual volume spikes may signal news or major price movements\n"
+            "  • Volume confirms trends: price moves with high volume are more reliable\n\n"
+            "P/E Ratio: Trailing Price-to-Earnings Ratio.\n"
+            "  • Low P/E (< 15): Potentially undervalued, good value\n"
+            "  • Moderate P/E (15-30): Fair valuation\n"
+            "  • High P/E (> 30): Potentially overvalued, expensive relative to earnings\n"
+            "  Note: Growth stocks often have higher P/E ratios\n\n"
+            "Target %: Percentage difference between the Analyst Mean Target Price and the current price.\n\n"
+            "RSI: Relative Strength Index (14-day). Thresholds adjust with trading style:\n"
+            "  Conservative: >75 Overbought, <25 Oversold\n"
+            "  Aggressive: >65 Overbought, <35 Oversold\n\n"
+            "MACD: Moving Average Convergence Divergence (12/26 periods). Helps identify momentum and trend direction.\n\n"
             "Day %: Price swing percentage for 1 day and the custom period (currently set to "
             f"{CONFIG.custom_period_days} days)."
         )
 
         pop = tk.Toplevel(self.root)
         pop.title("Stock Tracker Metric Info")
+        pop.geometry("800x600")
         pop.configure(bg=self.theme["background"])
         pop.transient(self.root)
         pop.grab_set()
 
-        tk.Label(pop, text=info_text, justify=tk.LEFT, padx=10, pady=10,
-                 bg=self.theme["background"], fg=self.theme["text"]).pack()
+        # Create scrollable text widget for long help text
+        frame = tk.Frame(pop, bg=self.theme["background"])
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(
+            frame,
+            wrap=tk.WORD,
+            bg=self.theme["background"],
+            fg=self.theme["text"],
+            font=("Arial", 10),
+            yscrollcommand=scrollbar.set,
+            relief=tk.FLAT
+        )
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_widget.insert("1.0", info_text)
+        text_widget.config(state=tk.DISABLED)
+        
+        scrollbar.config(command=text_widget.yview)
+        
         tk.Button(pop, text="Close", command=pop.destroy, bg=self.theme["button"], fg=self.theme["text"]).pack(pady=5)
         
     def show_details_popup(self, ticker: str) -> None:
@@ -1180,13 +1375,33 @@ class StockTrackerApp:
         detail_text += "--- Price & Performance ---\n"
         detail_text += f"Current Price: {info.get('regularMarketPrice', 'N/A'):.2f}\n"
         detail_text += f"Previous Close: {info.get('previousClose', 'N/A'):.2f}\n"
+        
+        # Format volume for readability
+        volume = info.get('volume')
+        if volume:
+            if volume >= 1_000_000_000:
+                vol_str = f"{volume/1_000_000_000:.2f}B"
+            elif volume >= 1_000_000:
+                vol_str = f"{volume/1_000_000:.2f}M"
+            elif volume >= 1_000:
+                vol_str = f"{volume/1_000:.2f}K"
+            else:
+                vol_str = f"{volume:,}"
+            detail_text += f"Volume: {vol_str}\n"
+        
         detail_text += f"50-Day Avg: {info.get('fiftyDayAverage', 'N/A'):.2f}\n"
         detail_text += f"52-Week High: {info.get('fiftyTwoWeekHigh', 'N/A'):.2f}\n"
         detail_text += f"52-Week Low: {info.get('fiftyTwoWeekLow', 'N/A'):.2f}\n"
         detail_text += f"1 Day Swing: {data.get('price_swing_1d', 'N/A')}\n"
         detail_text += f"{CONFIG.custom_period_days} Day Swing: {data.get('price_swing_1m', 'N/A')}\n"
         detail_text += "--- Key Metrics ---\n"
-        detail_text += f"Trailing P/E: {metrics.get('P/E', 'N/A'):.1f}\n"
+        
+        pe = metrics.get('P/E')
+        if pe:
+            detail_text += f"Trailing P/E: {pe:.1f}\n"
+        else:
+            detail_text += f"Trailing P/E: N/A\n"
+        
         if metrics.get('Target %') is not None:
              detail_text += f"Analyst Target Price: {metrics.get('Target', 'N/A'):.2f} ({metrics.get('Target %'):+.1f}%)\n"
         else:
@@ -1229,6 +1444,9 @@ class StockTrackerApp:
             # Initialize recommendation logic
             rec = "Hold"
             reasons: List[str] = []
+            
+            # Get adjusted thresholds based on trading aggression
+            thresholds = self._get_adjusted_thresholds()
 
             # Calculate 1-day price swing
             swing_1d: Optional[float] = None
@@ -1248,20 +1466,20 @@ class StockTrackerApp:
             # Recommendation based on 50-day moving average
             if price and "fiftyDayAverage" in info:
                 ma = info["fiftyDayAverage"]
-                if price < ma * CONFIG.recommendation_thresholds["buy_ma_ratio"]:
+                if price < ma * thresholds["buy_ma_ratio"]:
                     rec = "Buy"
                     reasons.append("Below 50-day MA")
-                elif price < ma * CONFIG.recommendation_thresholds["consider_buy_ma_ratio"]:
+                elif price < ma * thresholds["consider_buy_ma_ratio"]:
                     rec = "Consider Buying"
                     reasons.append("Near 50-day MA")
 
             # Recommendation based on 52-week high
             if price and "fiftyTwoWeekHigh" in info:
                 high = info["fiftyTwoWeekHigh"]
-                if price > high * CONFIG.recommendation_thresholds["sell_high_ratio"]:
+                if price > high * thresholds["sell_high_ratio"]:
                     rec = "Sell"
                     reasons.append("Near 52-week high")
-                elif price > high * CONFIG.recommendation_thresholds["consider_sell_high_ratio"] and rec == "Hold":
+                elif price > high * thresholds["consider_sell_high_ratio"] and rec == "Hold":
                     rec = "Consider Selling"
                     reasons.append("Approaching high")
 
@@ -1276,8 +1494,12 @@ class StockTrackerApp:
             if CONFIG.enable_metrics["rsi"]:
                 rsi, flag = registry.compute("rsi", hist_long)
                 metrics["RSI"] = rsi
-                if flag:
-                    reasons.append(flag)
+                if flag and rsi is not None:
+                    # Apply adjusted RSI thresholds
+                    if rsi > thresholds["rsi_overbought"]:
+                        reasons.append("Overbought")
+                    elif rsi < thresholds["rsi_oversold"]:
+                        reasons.append("Oversold")
             if CONFIG.enable_metrics["macd"]:
                 macd, _ = registry.compute("macd", hist_long)
                 metrics["MACD"] = macd
@@ -1334,6 +1556,10 @@ class StockTrackerApp:
         # Update display with new data
         self.stock_data = new_data
         self._update_list_display()
+
+        # Update last updated timestamp
+        self.last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.last_updated_lbl.config(text=f"Last updated: {self.last_updated}")
 
         # Re-enable UI controls
         for btn in self.button_refs.values():
