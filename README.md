@@ -1,7 +1,3 @@
-This application is using standard Python libraries and jsonschema.
-
-----------------------------
-
 Requirements:
 
 Python 3.13 Installed
