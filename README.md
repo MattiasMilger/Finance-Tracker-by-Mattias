@@ -14,4 +14,4 @@ Save the files provided.
 
 Root folder: Stock Tracker by Mattias.py, stock_search.py
 
-Run SysManual.py
+Run Stock Tracker by Mattias.py
