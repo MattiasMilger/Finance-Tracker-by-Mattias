@@ -249,11 +249,24 @@ class HistoricalChartWindow:
             # Update chart
             self.update_chart()
             
-            # Update status
+            # Update status with date range
             start_date = self.hist_data.index[0].strftime("%Y-%m-%d")
             end_date = self.hist_data.index[-1].strftime("%Y-%m-%d")
+            
+            # Calculate the actual time span for display
+            date_diff = self.hist_data.index[-1] - self.hist_data.index[0]
+            years = date_diff.days / 365.25
+            
+            if self.current_period == "max":
+                if years >= 1:
+                    period_display = f"Max ({years:.1f} years)"
+                else:
+                    period_display = f"Max ({date_diff.days} days)"
+            else:
+                period_display = self.current_period.upper()
+            
             self.status_label.config(
-                text=f"Showing data from {start_date} to {end_date} ({len(self.hist_data)} data points)"
+                text=f"Showing data from {start_date} to {end_date} ({len(self.hist_data)} data points) - Period: {period_display}"
             )
             
         except Exception as e:
