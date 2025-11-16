@@ -600,7 +600,7 @@ class StockTrackerApp:
             "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD"
         ]
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 16, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
+        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         self.header_labels = []
         for i, (text, width) in enumerate(zip(headers, char_widths)):
@@ -778,13 +778,20 @@ class StockTrackerApp:
     def _update_sort_indicator(self):
         """Update header labels to show current sort column and direction."""
         for lbl in self.header_labels:
-            base = lbl.cget("text").split(" ")[0]
+            base_text = lbl.cget("text").replace(" ↑", "").replace(" ↓", "")
+            
             # Check if this is the sorted column
-            if base == self._sort_column or (base.endswith("Day") and self._sort_column in ["1 Day %", f"{CONFIG.custom_period_days} Day %"]):
-                arrow = "Down" if self._sort_reverse else "Up"
-                lbl.config(text=base + " " + arrow)
+            is_sorted = False
+            if base_text == self._sort_column:
+                is_sorted = True
+            elif base_text.endswith("Day %") and self._sort_column in ["1 Day %", f"{CONFIG.custom_period_days} Day %"]:
+                is_sorted = True
+            
+            if is_sorted:
+                arrow = " ↓" if self._sort_reverse else " ↑"
+                lbl.config(text=base_text + arrow)
             else:
-                lbl.config(text=base)
+                lbl.config(text=base_text)
 
     def _sort_by_column(self, col_text: str):
         """Sort the displayed rows by a specific column.
@@ -795,8 +802,12 @@ class StockTrackerApp:
             col_text: Header text of the column to sort by
         """
         # Normalize column name (remove sort indicators)
-        col_text = col_text.split(" ")[0]
-        if col_text.endswith("Day"):
+        col_text = col_text.replace(" ↑", "").replace(" ↓", "")
+        if col_text.endswith("Day %"):
+            # Keep the full column name as-is
+            pass
+        elif col_text.endswith("Day"):
+            # Legacy handling for partial column names
             col_text = "1 Day %" if "1" in col_text else f"{CONFIG.custom_period_days} Day %"
 
         # Toggle sort direction if clicking same column
@@ -809,7 +820,8 @@ class StockTrackerApp:
         self._update_sort_indicator()
 
         # Find column index from headers
-        col_idx = next((i for i, h in enumerate(self.header_labels) if h.cget("text").split(" ")[0] == col_text), None)
+        col_idx = next((i for i, h in enumerate(self.header_labels) 
+                       if h.cget("text").replace(" ↑", "").replace(" ↓", "") == col_text), None)
         if col_idx is None:
             return
             
@@ -899,7 +911,7 @@ class StockTrackerApp:
         display_data.sort(key=lambda x: x[2]) 
 
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 16, 10, 12, 10, 12, 22, 25, 8, 10, 8, 10]
+        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         # Create a row for each ticker
         for ticker, data, _ in display_data:
