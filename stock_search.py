@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Optional, Dict, Callable, List
 import yfinance as yf
+from stock_charts import open_chart_window
 
 
 class StockSearchDialog:
@@ -188,6 +189,18 @@ class StockSearchDialog:
         )
         self.add_button.pack(side=tk.LEFT, padx=(0, 10))
         
+        self.chart_button = tk.Button(
+            button_frame,
+            text="📊 View Chart",
+            command=self.view_chart,
+            bg=self.theme["button"],
+            fg=self.theme["text"],
+            font=("Arial", 10, "bold"),
+            width=15,
+            state=tk.DISABLED
+        )
+        self.chart_button.pack(side=tk.LEFT, padx=(0, 10))
+        
         tk.Button(
             button_frame,
             text="Close",
@@ -203,6 +216,7 @@ class StockSearchDialog:
         selection = self.results_tree.selection()
         if not selection:
             self.add_button.config(state=tk.DISABLED)
+            self.chart_button.config(state=tk.DISABLED)
             self.current_stock_data = None
             return
         
@@ -216,8 +230,9 @@ class StockSearchDialog:
             'name': name
         }
         
-        # Enable the Add to Tracker button
+        # Enable the buttons
         self.add_button.config(state=tk.NORMAL)
+        self.chart_button.config(state=tk.NORMAL)
     
     def on_result_double_clicked(self) -> None:
         """Handle double-click - show detailed view."""
@@ -317,6 +332,7 @@ class StockSearchDialog:
         self.results_text.insert(tk.END, f"Searching for '{query}'...\n")
         self.results_text.config(state=tk.DISABLED)
         self.add_button.config(state=tk.DISABLED)
+        self.chart_button.config(state=tk.DISABLED)
         self.current_stock_data = None
         
         # Clear treeview
@@ -386,6 +402,7 @@ class StockSearchDialog:
             # Display results
             self._display_results(ticker, info, current_price, daily_change, daily_change_pct)
             self.add_button.config(state=tk.NORMAL)
+            self.chart_button.config(state=tk.NORMAL)
             
         except Exception as e:
             self._display_error(f"Error fetching data for '{ticker}': {str(e)}")
@@ -480,6 +497,25 @@ class StockSearchDialog:
         self.results_text.insert(tk.END, "  - UK stocks: BP.L, HSBA.L\n")
         self.results_text.config(state=tk.DISABLED)
         self.current_stock_data = None
+        self.chart_button.config(state=tk.DISABLED)
+    
+    def view_chart(self) -> None:
+        """Open chart window for the selected stock."""
+        if not self.current_stock_data:
+            return
+        
+        ticker = self.current_stock_data['ticker']
+        name = self.current_stock_data.get('name', ticker)
+        
+        try:
+            # Release the modal grab to allow full interaction with chart window
+            self.dialog.grab_release()
+            open_chart_window(self.parent, self.theme, ticker, name, period="1y")
+            # Don't restore grab - let user freely interact with both windows
+        except Exception as e:
+            messagebox.showerror("Chart Error", f"Failed to open chart: {str(e)}")
+            # Restore grab only on error
+            self.dialog.grab_set()
     
     def add_to_tracker(self) -> None:
         """Add the searched stock to the main tracker."""
