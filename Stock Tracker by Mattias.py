@@ -20,6 +20,7 @@ from tkinter import messagebox, filedialog
 import yfinance as yf
 
 from stock_search import open_stock_search
+from stock_charts import open_chart_window
 
 
 # --------------------------------------------------------------------------- #
@@ -499,7 +500,7 @@ class StockTrackerApp:
         # Help menu - metric explanations
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Info – Metric Explanations", command=self.show_info_popup)
+        help_menu.add_command(label="Info — Metric Explanations", command=self.show_info_popup)
 
     def _setup_ui(self) -> None:
         """Create and layout all UI components."""
@@ -597,10 +598,10 @@ class StockTrackerApp:
         headers = [
             "Ticker", "Name", "Recommendation", "Price",
             "1 Day %", f"{CONFIG.custom_period_days} Day %",
-            "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD"
+            "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD", "Chart"
         ]
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
+        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10, 8]
 
         self.header_labels = []
         for i, (text, width) in enumerate(zip(headers, char_widths)):
@@ -616,8 +617,9 @@ class StockTrackerApp:
                 bd=1
             )
             lbl.grid(row=0, column=i, padx=0, pady=0, sticky="nsew")
-            # Click header to sort by that column
-            lbl.bind("<Button-1>", lambda e, col=text: self._sort_by_column(col))
+            # Click header to sort by that column (except Chart column)
+            if text != "Chart":
+                lbl.bind("<Button-1>", lambda e, col=text: self._sort_by_column(col))
             self.header_labels.append(lbl)
         
         # Configure columns to expand proportionally
@@ -911,7 +913,7 @@ class StockTrackerApp:
         display_data.sort(key=lambda x: x[2]) 
 
         # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
+        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10, 8]
 
         # Create a row for each ticker
         for ticker, data, _ in display_data:
@@ -958,7 +960,8 @@ class StockTrackerApp:
                 f"{data['metrics'].get('P/E', ''):.1f}" if data and data['metrics'].get('P/E') else "",
                 f"{data['metrics'].get('Target %', ''):+.1f}%" if data and data['metrics'].get('Target %') else "",
                 f"{data['metrics'].get('RSI', ''):.1f}" if data and data['metrics'].get('RSI') else "",
-                f"{data['metrics'].get('MACD', ''):+.3f}" if data and data['metrics'].get('MACD') else ""
+                f"{data['metrics'].get('MACD', ''):+.3f}" if data and data['metrics'].get('MACD') else "",
+                "📊"  # Chart icon
             ]
 
             # Create label widgets for each column
@@ -989,13 +992,21 @@ class StockTrackerApp:
                     relief="flat"
                 )
                 lbl.grid(row=0, column=i, padx=(0, 1), sticky="ew")
+                
+                # Make chart icon clickable
+                if i == len(values) - 1 and data:  # Last column (Chart)
+                    lbl.config(cursor="hand2", font=("Consolas", 12))
+                    chart_cmd = partial(self.open_chart, ticker, data.get("name", ticker))
+                    lbl.bind("<Button-1>", lambda e, cmd=chart_cmd: cmd())
+                
                 labels.append(lbl)
 
             # Double-click row to show detailed popup
             click_cmd = partial(self.show_details_popup, ticker)
             frame.bind("<Double-1>", lambda e: click_cmd())
-            for lbl in labels:
-                lbl.bind("<Double-1>", lambda e: click_cmd())
+            for idx, lbl in enumerate(labels):
+                if idx != len(labels) - 1:  # Don't bind double-click to chart icon
+                    lbl.bind("<Double-1>", lambda e: click_cmd())
 
             # Store row data for sorting and filtering
             self.rows.append({"frame": frame, "labels": labels, "data": data, "ticker": ticker})
@@ -1004,6 +1015,18 @@ class StockTrackerApp:
         fetched = len(self.stock_data)
         total = len(self.current_tickers)
         self.status_lbl.config(text=f"Fetched {fetched}/{total} stock(s).")
+
+    def open_chart(self, ticker: str, stock_name: str = "") -> None:
+        """Open historical chart window for a stock.
+        
+        Args:
+            ticker: Stock ticker symbol
+            stock_name: Company name for display
+        """
+        try:
+            open_chart_window(self.root, self.theme, ticker, stock_name, period="1y")
+        except Exception as e:
+            messagebox.showerror("Chart Error", f"Failed to open chart for {ticker}: {str(e)}")
 
     def _normalize_ticker(self, t: str) -> str:
         """Normalize ticker symbol by applying exchange suffix mappings.
