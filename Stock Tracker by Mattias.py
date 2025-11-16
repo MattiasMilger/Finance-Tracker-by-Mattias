@@ -500,7 +500,7 @@ class StockTrackerApp:
         # Help menu - metric explanations
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Info — Metric Explanations", command=self.show_info_popup)
+        help_menu.add_command(label="Info", command=self.show_info_popup)
 
     def _setup_ui(self) -> None:
         """Create and layout all UI components."""
@@ -1376,9 +1376,11 @@ class StockTrackerApp:
             messagebox.showinfo("No Default", "No default list is set.")
             
     def show_info_popup(self, event=None) -> None:
-        """Display a popup explaining all metrics and recommendations."""
+        """Display a popup with info."""
         info_text = (
-            "Stock Tracker Metrics Explained:\n\n"
+            "=== INTERFACE ===\n\n"
+            "Double-click rows for detailed info\n\n"
+            "Click 📊 icon for charts\n\n"
             "=== RECOMMENDATION SYSTEMS ===\n\n"
             "Simple (Legacy) Mode:\n"
             "  • Uses traditional threshold-based logic\n"
