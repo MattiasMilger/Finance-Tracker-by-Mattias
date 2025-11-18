@@ -29,7 +29,7 @@ from stock_charts import open_chart_window
 @dataclass
 class AppConfig:
     """Application configuration with default settings for UI, analysis, and thresholds."""
-    min_window_width: int = 1063
+    min_window_width: int = 1133
     min_window_height: int = 600
     lists_dir: str = "ticker_lists"
     default_list_file: str = "default_list.txt"
@@ -37,6 +37,8 @@ class AppConfig:
     price_swing_threshold: float = 5.0  # Minimum % change to flag in reasons
     custom_period_days: int = 30  # Default lookback period for historical analysis
     trading_aggression: float = 0.5  # 0.0 = conservative, 1.0 = aggressive
+
+    
     recommendation_mode: str = "simple"  # "simple" or "complex"
 
     # Thresholds for generating buy/sell recommendations (simple mode)
@@ -596,12 +598,12 @@ class StockTrackerApp:
         self.header_frame.pack(fill=tk.X)
 
         headers = [
-            "Ticker", "Name", "Recommendation", "Price",
+            "Chart", "Ticker", "Name", "Recommendation", "Price",
             "1 Day %", f"{CONFIG.custom_period_days} Day %",
-            "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD", "Chart"
+            "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD"
         ]
-        # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10, 8]
+        # Column widths in characters - Chart column narrower since it's just an icon
+        char_widths = [6, 10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         self.header_labels = []
         for i, (text, width) in enumerate(zip(headers, char_widths)):
@@ -821,7 +823,7 @@ class StockTrackerApp:
 
         self._update_sort_indicator()
 
-        # Find column index from headers
+        # Find column index from headers (account for Chart being first now)
         col_idx = next((i for i, h in enumerate(self.header_labels) 
                        if h.cget("text").replace(" ↑", "").replace(" ↓", "") == col_text), None)
         if col_idx is None:
@@ -848,7 +850,7 @@ class StockTrackerApp:
             def key_func(row):
                 val = row["labels"][col_idx].cget("text")
                 # Handle missing/error values (sort to end)
-                if val in ("N/A", "", "Error"):
+                if val in ("N/A", "", "Error", "📊"):
                     return (1, 0)
                 # Parse percentage values as floats
                 if "%" in val:
@@ -912,8 +914,8 @@ class StockTrackerApp:
         # Sort by recommendation priority (most urgent first)
         display_data.sort(key=lambda x: x[2]) 
 
-        # Column widths in characters - increased for Name, Sector, Industry to prevent truncation
-        char_widths = [10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10, 8]
+        # Column widths in characters - Chart column narrower
+        char_widths = [6, 10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         # Create a row for each ticker
         for ticker, data, _ in display_data:
@@ -947,7 +949,9 @@ class StockTrackerApp:
                 else:
                     volume_str = str(vol)
             
+            # Chart icon is now first column
             values = [
+                "📊",  # Chart icon - FIRST column
                 ticker,
                 data["name"] if data else "",
                 data["recommendation"] if data else "",
@@ -961,7 +965,6 @@ class StockTrackerApp:
                 f"{data['metrics'].get('Target %', ''):+.1f}%" if data and data['metrics'].get('Target %') else "",
                 f"{data['metrics'].get('RSI', ''):.1f}" if data and data['metrics'].get('RSI') else "",
                 f"{data['metrics'].get('MACD', ''):+.3f}" if data and data['metrics'].get('MACD') else "",
-                "📊"  # Chart icon
             ]
 
             # Create label widgets for each column
@@ -969,7 +972,7 @@ class StockTrackerApp:
                 fg = self.theme["tree_fg"]
                 
                 # Color-code percentage changes: green for positive, red for negative
-                if i in [4, 5] and isinstance(val, str) and "%" in val and val != "N/A":
+                if i in [5, 6] and isinstance(val, str) and "%" in val and val != "N/A":
                     try:
                         num = float(val.replace("%", "").replace("+", "").replace(" ", ""))
                         fg = "#66ff99" if num > 0 else "#ff6b6b" if num < 0 else "#cccccc"
@@ -978,7 +981,7 @@ class StockTrackerApp:
                 
                 # Truncate text if too long (prevents horizontal overflow)
                 display_val = val
-                if isinstance(val, str) and len(val) > width:
+                if isinstance(val, str) and len(val) > width and i != 0:  # Don't truncate chart icon
                     display_val = val[:width-2] + ".."
                 
                 lbl = tk.Label(
@@ -986,16 +989,16 @@ class StockTrackerApp:
                     text=display_val,
                     bg=bg_color,
                     fg=fg,
-                    font=("Consolas", 10),
+                    font=("Consolas", 12 if i == 0 else 10),  # Larger font for chart icon
                     width=width,
                     anchor="center",
                     relief="flat"
                 )
                 lbl.grid(row=0, column=i, padx=(0, 1), sticky="ew")
                 
-                # Make chart icon clickable
-                if i == len(values) - 1 and data:  # Last column (Chart)
-                    lbl.config(cursor="hand2", font=("Consolas", 12))
+                # Make chart icon clickable (first column now)
+                if i == 0 and data:  # Chart icon column
+                    lbl.config(cursor="hand2")
                     chart_cmd = partial(self.open_chart, ticker, data.get("name", ticker))
                     lbl.bind("<Button-1>", lambda e, cmd=chart_cmd: cmd())
                 
@@ -1005,7 +1008,7 @@ class StockTrackerApp:
             click_cmd = partial(self.show_details_popup, ticker)
             frame.bind("<Double-1>", lambda e: click_cmd())
             for idx, lbl in enumerate(labels):
-                if idx != len(labels) - 1:  # Don't bind double-click to chart icon
+                if idx != 0:  # Don't bind double-click to chart icon
                     lbl.bind("<Double-1>", lambda e: click_cmd())
 
             # Store row data for sorting and filtering
@@ -1243,8 +1246,8 @@ class StockTrackerApp:
                     raise ValueError
                 CONFIG.custom_period_days = days
                 
-                # Update header label with new period
-                self.header_labels[5].config(text=f"{days} Day %")
+                # Update header label with new period (index 6 now since Chart is first)
+                self.header_labels[6].config(text=f"{days} Day %")
                 
                 # Mark as unsaved change
                 self.unsaved_changes = True
@@ -1313,8 +1316,8 @@ class StockTrackerApp:
             CONFIG.custom_period_days = custom_period
             self.recommendation_mode = rec_mode
             
-            # Update header label with loaded period
-            self.header_labels[5].config(text=f"{custom_period} Day %")
+            # Update header label with loaded period (index 6 now since Chart is first)
+            self.header_labels[6].config(text=f"{custom_period} Day %")
             
             style_name = self._get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
@@ -1342,8 +1345,8 @@ class StockTrackerApp:
             CONFIG.custom_period_days = custom_period
             self.recommendation_mode = rec_mode
             
-            # Update header label with loaded period
-            self.header_labels[5].config(text=f"{custom_period} Day %")
+            # Update header label with loaded period (index 6 now since Chart is first)
+            self.header_labels[6].config(text=f"{custom_period} Day %")
             
             style_name = self._get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
