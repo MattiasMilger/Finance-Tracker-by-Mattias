@@ -1,6 +1,6 @@
 """Historical Price Charts Module for Stock Tracker Application.
 
-Provides interactive charts with multiple timeframes, technical indicators,
+Provides beautiful, interactive charts with multiple timeframes, technical indicators,
 and volume analysis using matplotlib.
 """
 import tkinter as tk
@@ -28,7 +28,7 @@ class HistoricalChartWindow:
             theme: Color theme dictionary
             ticker: Stock ticker symbol
             stock_name: Company name for display
-            initial_period: Initial time period to display (1mo, 3mo, 6mo, 1y, 2y, 5y, max)
+            initial_period: Initial time period to display
         """
         self.parent = parent
         self.theme = theme
@@ -41,15 +41,16 @@ class HistoricalChartWindow:
         self.show_ma200 = tk.BooleanVar(value=True)
         self.show_volume = tk.BooleanVar(value=True)
         self.show_bollinger = tk.BooleanVar(value=False)
-        self.chart_type = tk.StringVar(value="line")  # line, candlestick, area
+        self.show_ema = tk.BooleanVar(value=False)
+        self.chart_type = tk.StringVar(value="line")
         
         # Data storage
         self.hist_data: Optional[pd.DataFrame] = None
         
         # Create window with larger size
         self.window = tk.Toplevel(parent)
-        self.window.title(f"Historical Chart: {ticker} - {self.stock_name}")
-        self.window.geometry("1500x950")  # Increased from 1400x900
+        self.window.title(f"📈 {ticker} - {self.stock_name}")
+        self.window.geometry("1600x950")
         self.window.configure(bg=theme["background"])
         
         # Setup UI
@@ -60,51 +61,61 @@ class HistoricalChartWindow:
     
     def _setup_ui(self):
         """Create and layout all UI components."""
-        # Top control panel
+        # Top control panel with better styling
         control_frame = tk.Frame(self.window, bg=self.theme["background"])
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
+        control_frame.pack(fill=tk.X, padx=15, pady=15)
         
-        # Left side - period selection
+        # Left side - period selection with better buttons
         period_frame = tk.LabelFrame(
             control_frame, 
-            text="Time Period", 
+            text="📅 Time Period", 
             bg=self.theme["background"],
             fg=self.theme["text"],
+            font=("Arial", 10, "bold"),
             padx=10,
-            pady=5
+            pady=8
         )
         period_frame.pack(side=tk.LEFT, padx=(0, 20))
         
         periods = [
-            ("1 Month", "1mo"),
-            ("3 Months", "3mo"),
-            ("6 Months", "6mo"),
-            ("1 Year", "1y"),
-            ("2 Years", "2y"),
-            ("5 Years", "5y"),
+            ("1W", "5d"),
+            ("1M", "1mo"),
+            ("3M", "3mo"),
+            ("6M", "6mo"),
+            ("YTD", "ytd"),
+            ("1Y", "1y"),
+            ("2Y", "2y"),
+            ("5Y", "5y"),
             ("Max", "max")
         ]
         
+        self.period_buttons = {}
         for i, (label, period) in enumerate(periods):
             btn = tk.Button(
                 period_frame,
                 text=label,
                 command=lambda p=period: self.change_period(p),
-                bg=self.theme["button"],
+                bg=self.theme["button"] if period != self.current_period else "#4a7ba7",
                 fg=self.theme["text"],
-                width=10,
-                relief=tk.RAISED if period != self.current_period else tk.SUNKEN
+                font=("Arial", 9, "bold"),
+                width=6,
+                height=1,
+                relief=tk.RAISED,
+                bd=2,
+                cursor="hand2"
             )
             btn.grid(row=0, column=i, padx=2)
+            self.period_buttons[period] = btn
             
         # Middle - chart type
         chart_frame = tk.LabelFrame(
             control_frame,
-            text="Chart Type",
+            text="📊 Chart Style",
             bg=self.theme["background"],
             fg=self.theme["text"],
+            font=("Arial", 10, "bold"),
             padx=10,
-            pady=5
+            pady=8
         )
         chart_frame.pack(side=tk.LEFT, padx=(0, 20))
         
@@ -125,26 +136,29 @@ class HistoricalChartWindow:
                 fg=self.theme["text"],
                 selectcolor=self.theme["button"],
                 activebackground=self.theme["background"],
-                activeforeground=self.theme["text"]
+                activeforeground=self.theme["text"],
+                font=("Arial", 9)
             )
-            rb.grid(row=0, column=i, padx=5)
+            rb.grid(row=0, column=i, padx=8)
         
         # Right side - indicators
         indicator_frame = tk.LabelFrame(
             control_frame,
-            text="Indicators",
+            text="📉 Technical Indicators",
             bg=self.theme["background"],
             fg=self.theme["text"],
+            font=("Arial", 10, "bold"),
             padx=10,
-            pady=5
+            pady=8
         )
         indicator_frame.pack(side=tk.LEFT)
         
         indicators = [
             ("50-Day MA", self.show_ma50),
             ("200-Day MA", self.show_ma200),
-            ("Volume", self.show_volume),
-            ("Bollinger Bands", self.show_bollinger)
+            ("EMA (20)", self.show_ema),
+            ("Bollinger Bands", self.show_bollinger),
+            ("Volume", self.show_volume)
         ]
         
         for i, (label, var) in enumerate(indicators):
@@ -157,27 +171,31 @@ class HistoricalChartWindow:
                 fg=self.theme["text"],
                 selectcolor=self.theme["button"],
                 activebackground=self.theme["background"],
-                activeforeground=self.theme["text"]
+                activeforeground=self.theme["text"],
+                font=("Arial", 9)
             )
-            cb.grid(row=0, column=i, padx=5)
+            cb.grid(row=0, column=i, padx=8)
         
-        # Refresh button - removed emoji
+        # Refresh button
         tk.Button(
             control_frame,
-            text="Refresh",
+            text="🔄 Refresh",
             command=self.load_data,
-            bg=self.theme["button"],
+            bg="#4a7ba7",
             fg=self.theme["text"],
             font=("Arial", 10, "bold"),
-            width=10
+            width=10,
+            cursor="hand2",
+            relief=tk.RAISED,
+            bd=2
         ).pack(side=tk.RIGHT, padx=10)
         
         # Chart container with matplotlib
         chart_container = tk.Frame(self.window, bg=self.theme["background"])
-        chart_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        chart_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
         
-        # Create matplotlib figure with larger size
-        self.fig = Figure(figsize=(15, 9), facecolor=self.theme["background"])  # Increased from 14x8
+        # Create matplotlib figure with larger size and better styling
+        self.fig = Figure(figsize=(16, 9), facecolor=self.theme["background"], dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, master=chart_container)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
@@ -187,60 +205,59 @@ class HistoricalChartWindow:
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
         
-        # Status bar
+        # Status bar with better styling
         self.status_label = tk.Label(
             self.window,
             text="Ready",
             bg=self.theme["background"],
             fg=self.theme["text"],
-            font=("Arial", 9),
-            anchor=tk.W
+            font=("Arial", 10),
+            anchor=tk.W,
+            relief=tk.FLAT,
+            padx=15
         )
-        self.status_label.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.status_label.pack(fill=tk.X, pady=(0, 10))
     
     def change_period(self, period: str):
-        """Change the time period and reload data.
-        
-        Args:
-            period: New period string (1mo, 3mo, 6mo, 1y, 2y, 5y, max)
-        """
+        """Change the time period and reload data."""
         self.current_period = period
         self.load_data()
         
         # Update button states
-        for widget in self.window.winfo_children():
-            if isinstance(widget, tk.Frame):
-                for child in widget.winfo_children():
-                    if isinstance(child, tk.LabelFrame) and child.cget("text") == "Time Period":
-                        for btn in child.winfo_children():
-                            if isinstance(btn, tk.Button):
-                                btn.config(relief=tk.RAISED)
-                                if period in btn.cget("text").lower().replace(" ", ""):
-                                    btn.config(relief=tk.SUNKEN)
+        for p, btn in self.period_buttons.items():
+            if p == period:
+                btn.config(bg="#4a7ba7", relief=tk.SUNKEN)
+            else:
+                btn.config(bg=self.theme["button"], relief=tk.RAISED)
     
     def load_data(self):
         """Fetch historical data from yfinance and update chart."""
-        self.status_label.config(text=f"Loading data for {self.ticker}...")
+        self.status_label.config(text=f"⏳ Loading data for {self.ticker}...")
         self.window.update_idletasks()
         
         try:
             stock = yf.Ticker(self.ticker)
             
-            # Determine interval based on period
-            interval = "1d"
-            if self.current_period in ["1mo", "3mo"]:
-                interval = "1d"
-            elif self.current_period in ["6mo", "1y"]:
-                interval = "1d"
-            else:
-                interval = "1wk"  # Use weekly for longer periods
+            # Determine interval based on period for better granularity
+            interval_map = {
+                "5d": "15m",
+                "1mo": "1d",
+                "3mo": "1d",
+                "6mo": "1d",
+                "ytd": "1d",
+                "1y": "1d",
+                "2y": "1wk",
+                "5y": "1wk",
+                "max": "1mo"
+            }
+            interval = interval_map.get(self.current_period, "1d")
             
             # Fetch data
             self.hist_data = stock.history(period=self.current_period, interval=interval)
             
             if self.hist_data.empty:
                 messagebox.showerror("Error", f"No data available for {self.ticker}")
-                self.status_label.config(text="Error: No data available")
+                self.status_label.config(text="❌ Error: No data available")
                 return
             
             # Calculate indicators
@@ -255,23 +272,32 @@ class HistoricalChartWindow:
             
             # Calculate the actual time span for display
             date_diff = self.hist_data.index[-1] - self.hist_data.index[0]
-            years = date_diff.days / 365.25
             
-            if self.current_period == "max":
-                if years >= 1:
-                    period_display = f"Max ({years:.1f} years)"
-                else:
-                    period_display = f"Max ({date_diff.days} days)"
-            else:
-                period_display = self.current_period.upper()
+            period_display = self._get_period_display(date_diff)
             
             self.status_label.config(
-                text=f"Showing data from {start_date} to {end_date} ({len(self.hist_data)} data points) - Period: {period_display}"
+                text=f"✅ Showing {len(self.hist_data)} data points from {start_date} to {end_date} ({period_display})"
             )
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load data: {str(e)}")
-            self.status_label.config(text=f"Error: {str(e)}")
+            self.status_label.config(text=f"❌ Error: {str(e)}")
+    
+    def _get_period_display(self, date_diff):
+        """Get human-readable period display."""
+        days = date_diff.days
+        
+        if days < 7:
+            return f"{days} days"
+        elif days < 60:
+            weeks = days // 7
+            return f"{weeks} week{'s' if weeks > 1 else ''}"
+        elif days < 365:
+            months = days // 30
+            return f"{months} month{'s' if months > 1 else ''}"
+        else:
+            years = days / 365.25
+            return f"{years:.1f} year{'s' if years > 1 else ''}"
     
     def _calculate_indicators(self):
         """Calculate technical indicators on historical data."""
@@ -281,6 +307,9 @@ class HistoricalChartWindow:
         # Moving averages
         self.hist_data["MA50"] = self.hist_data["Close"].rolling(window=50).mean()
         self.hist_data["MA200"] = self.hist_data["Close"].rolling(window=200).mean()
+        
+        # Exponential Moving Average
+        self.hist_data["EMA20"] = self.hist_data["Close"].ewm(span=20, adjust=False).mean()
         
         # Bollinger Bands (20-day, 2 std dev)
         self.hist_data["BB_Middle"] = self.hist_data["Close"].rolling(window=20).mean()
@@ -298,34 +327,47 @@ class HistoricalChartWindow:
         
         # Determine layout
         if self.show_volume.get():
-            gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.05)
+            gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.08)
             ax_price = self.fig.add_subplot(gs[0])
             ax_volume = self.fig.add_subplot(gs[1], sharex=ax_price)
         else:
             ax_price = self.fig.add_subplot(111)
             ax_volume = None
         
-        # Configure colors for dark theme
-        text_color = "#e0e0e0"
-        grid_color = "#3a3a3a"
+        # Configure colors for dark theme with better contrast
+        text_color = "#e8e8e8"
+        grid_color = "#404040"
+        price_color = "#64B5F6"
         
         # Draw price chart
         if self.chart_type.get() == "line":
-            self._draw_line_chart(ax_price)
+            self._draw_line_chart(ax_price, price_color)
         elif self.chart_type.get() == "candlestick":
             self._draw_candlestick_chart(ax_price)
         elif self.chart_type.get() == "area":
-            self._draw_area_chart(ax_price)
+            self._draw_area_chart(ax_price, price_color)
         
-        # Add moving averages
+        # Add EMA
+        if self.show_ema.get() and "EMA20" in self.hist_data.columns:
+            ax_price.plot(
+                self.hist_data.index,
+                self.hist_data["EMA20"],
+                label="20-Day EMA",
+                color="#9C27B0",
+                linewidth=2,
+                alpha=0.8,
+                linestyle="--"
+            )
+        
+        # Add moving averages with better styling
         if self.show_ma50.get() and "MA50" in self.hist_data.columns:
             ax_price.plot(
                 self.hist_data.index,
                 self.hist_data["MA50"],
                 label="50-Day MA",
                 color="#FFB74D",
-                linewidth=1.5,
-                alpha=0.8
+                linewidth=2.5,
+                alpha=0.9
             )
         
         if self.show_ma200.get() and "MA200" in self.hist_data.columns:
@@ -334,138 +376,190 @@ class HistoricalChartWindow:
                 self.hist_data["MA200"],
                 label="200-Day MA",
                 color="#E57373",
-                linewidth=1.5,
-                alpha=0.8
+                linewidth=2.5,
+                alpha=0.9
             )
         
-        # Add Bollinger Bands
+        # Add Bollinger Bands with better styling
         if self.show_bollinger.get():
             ax_price.plot(
                 self.hist_data.index,
                 self.hist_data["BB_Upper"],
                 label="Upper BB",
-                color="#9575CD",
-                linewidth=1,
-                linestyle="--",
-                alpha=0.6
+                color="#AB47BC",
+                linewidth=1.5,
+                linestyle=":",
+                alpha=0.7
             )
             ax_price.plot(
                 self.hist_data.index,
                 self.hist_data["BB_Lower"],
                 label="Lower BB",
-                color="#9575CD",
-                linewidth=1,
-                linestyle="--",
-                alpha=0.6
+                color="#AB47BC",
+                linewidth=1.5,
+                linestyle=":",
+                alpha=0.7
             )
             ax_price.fill_between(
                 self.hist_data.index,
                 self.hist_data["BB_Upper"],
                 self.hist_data["BB_Lower"],
-                alpha=0.1,
-                color="#9575CD"
+                alpha=0.15,
+                color="#AB47BC"
             )
         
-        # Configure price axis
-        ax_price.set_ylabel("Price ($)", color=text_color, fontsize=11)
+        # Configure price axis with better styling
+        ax_price.set_ylabel("Price ($)", color=text_color, fontsize=12, fontweight="bold")
+        
+        # Better title with more info
+        current_price = self.hist_data["Close"].iloc[-1]
+        price_change = self.hist_data["Close"].iloc[-1] - self.hist_data["Close"].iloc[0]
+        price_change_pct = (price_change / self.hist_data["Close"].iloc[0]) * 100
+        change_color = "#66BB6A" if price_change >= 0 else "#EF5350"
+        
+        title_text = f"{self.ticker} - {self.stock_name}\n"
+        title_text += f"${current_price:.2f}  "
+        title_text += f"{'▲' if price_change >= 0 else '▼'} ${abs(price_change):.2f} ({price_change_pct:+.2f}%)"
+        
         ax_price.set_title(
-            f"{self.ticker} - {self.stock_name} ({self.current_period.upper()})",
+            title_text,
             color=text_color,
-            fontsize=14,
+            fontsize=15,
             fontweight="bold",
             pad=20
         )
-        ax_price.grid(True, alpha=0.2, color=grid_color)
-        ax_price.legend(loc="upper left", framealpha=0.9, facecolor=self.theme["button"])
-        ax_price.tick_params(colors=text_color)
+        
+        # Better grid
+        ax_price.grid(True, alpha=0.3, color=grid_color, linestyle="--", linewidth=0.8)
+        ax_price.set_axisbelow(True)
+        
+        # Better legend
+        legend = ax_price.legend(
+            loc="upper left", 
+            framealpha=0.95, 
+            facecolor=self.theme["button"],
+            edgecolor=grid_color,
+            fontsize=10
+        )
+        for text in legend.get_texts():
+            text.set_color(text_color)
+        
+        # Style axes
+        ax_price.tick_params(colors=text_color, labelsize=10)
         ax_price.spines["bottom"].set_color(grid_color)
         ax_price.spines["top"].set_color(grid_color)
         ax_price.spines["left"].set_color(grid_color)
         ax_price.spines["right"].set_color(grid_color)
         
-        # Format x-axis
+        # Format x-axis with better date formatting
         if ax_volume is None:
-            ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-            plt.setp(ax_price.xaxis.get_majorticklabels(), rotation=45, ha="right")
+            self._format_xaxis(ax_price, text_color)
         else:
             plt.setp(ax_price.xaxis.get_majorticklabels(), visible=False)
         
-        # Draw volume chart
+        # Draw volume chart with better styling
         if ax_volume is not None:
             self._draw_volume_chart(ax_volume)
-            ax_volume.set_ylabel("Volume", color=text_color, fontsize=11)
-            ax_volume.set_xlabel("Date", color=text_color, fontsize=11)
-            ax_volume.grid(True, alpha=0.2, color=grid_color)
-            ax_volume.tick_params(colors=text_color)
+            ax_volume.set_ylabel("Volume", color=text_color, fontsize=11, fontweight="bold")
+            ax_volume.set_xlabel("Date", color=text_color, fontsize=11, fontweight="bold")
+            ax_volume.grid(True, alpha=0.3, color=grid_color, linestyle="--", linewidth=0.8)
+            ax_volume.set_axisbelow(True)
+            ax_volume.tick_params(colors=text_color, labelsize=10)
             ax_volume.spines["bottom"].set_color(grid_color)
             ax_volume.spines["top"].set_color(grid_color)
             ax_volume.spines["left"].set_color(grid_color)
             ax_volume.spines["right"].set_color(grid_color)
-            ax_volume.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-            plt.setp(ax_volume.xaxis.get_majorticklabels(), rotation=45, ha="right")
+            self._format_xaxis(ax_volume, text_color)
         
         # Apply tight layout and redraw
         self.fig.tight_layout()
         self.canvas.draw()
     
-    def _draw_line_chart(self, ax):
-        """Draw a simple line chart."""
+    def _format_xaxis(self, ax, text_color):
+        """Format x-axis with appropriate date format based on period."""
+        if self.current_period in ["5d", "1mo"]:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(self.hist_data) // 10)))
+        elif self.current_period in ["3mo", "6mo"]:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+            ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=max(1, len(self.hist_data) // 15)))
+        elif self.current_period in ["ytd", "1y"]:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+        else:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+            ax.xaxis.set_major_locator(mdates.YearLocator())
+        
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right", color=text_color)
+    
+    def _draw_line_chart(self, ax, color):
+        """Draw a simple line chart with better styling."""
         ax.plot(
             self.hist_data.index,
             self.hist_data["Close"],
             label="Close Price",
-            color="#64B5F6",
-            linewidth=2
+            color=color,
+            linewidth=2.5,
+            alpha=0.9
         )
     
-    def _draw_area_chart(self, ax):
-        """Draw an area chart."""
+    def _draw_area_chart(self, ax, color):
+        """Draw an area chart with gradient effect."""
         ax.fill_between(
             self.hist_data.index,
             self.hist_data["Close"],
-            alpha=0.3,
-            color="#64B5F6",
+            alpha=0.4,
+            color=color,
             label="Close Price"
         )
         ax.plot(
             self.hist_data.index,
             self.hist_data["Close"],
-            color="#64B5F6",
-            linewidth=2
+            color=color,
+            linewidth=2.5,
+            alpha=0.9
         )
     
     def _draw_candlestick_chart(self, ax):
-        """Draw a candlestick chart."""
-        # Prepare data
+        """Draw a candlestick chart with better colors."""
         up = self.hist_data[self.hist_data.Close >= self.hist_data.Open]
         down = self.hist_data[self.hist_data.Close < self.hist_data.Open]
         
-        width = 0.6
-        width2 = 0.05
+        width = 0.8
+        width2 = 0.1
         
-        # Up candles (green)
-        ax.bar(up.index, up.Close - up.Open, width, bottom=up.Open, color="#66BB6A", alpha=0.8)
-        ax.bar(up.index, up.High - up.Close, width2, bottom=up.Close, color="#66BB6A")
-        ax.bar(up.index, up.Low - up.Open, width2, bottom=up.Open, color="#66BB6A")
+        # Up candles (green) with better styling
+        ax.bar(up.index, up.Close - up.Open, width, bottom=up.Open, 
+               color="#26A69A", alpha=0.9, edgecolor="#1B7E72", linewidth=1.5)
+        ax.bar(up.index, up.High - up.Close, width2, bottom=up.Close, 
+               color="#26A69A", alpha=0.9)
+        ax.bar(up.index, up.Low - up.Open, width2, bottom=up.Open, 
+               color="#26A69A", alpha=0.9)
         
-        # Down candles (red)
-        ax.bar(down.index, down.Close - down.Open, width, bottom=down.Open, color="#EF5350", alpha=0.8)
-        ax.bar(down.index, down.High - down.Open, width2, bottom=down.Open, color="#EF5350")
-        ax.bar(down.index, down.Low - down.Close, width2, bottom=down.Close, color="#EF5350")
+        # Down candles (red) with better styling
+        ax.bar(down.index, down.Close - down.Open, width, bottom=down.Open, 
+               color="#EF5350", alpha=0.9, edgecolor="#C62828", linewidth=1.5)
+        ax.bar(down.index, down.High - down.Open, width2, bottom=down.Open, 
+               color="#EF5350", alpha=0.9)
+        ax.bar(down.index, down.Low - down.Close, width2, bottom=down.Close, 
+               color="#EF5350", alpha=0.9)
     
     def _draw_volume_chart(self, ax):
-        """Draw volume bars."""
-        # Color bars based on price change
-        colors = ["#66BB6A" if close >= open_price else "#EF5350" 
+        """Draw volume bars with better colors."""
+        colors = ["#26A69A" if close >= open_price else "#EF5350" 
                   for close, open_price in zip(self.hist_data["Close"], self.hist_data["Open"])]
         
         ax.bar(
             self.hist_data.index,
             self.hist_data["Volume"],
             color=colors,
-            alpha=0.6,
-            width=0.8
+            alpha=0.7,
+            width=0.8,
+            edgecolor="none"
         )
+        
+        # Format volume axis
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/1e6:.1f}M' if x >= 1e6 else f'{x/1e3:.0f}K'))
 
 
 def open_chart_window(parent: tk.Tk, theme: Dict[str, str], ticker: str, 
@@ -477,7 +571,7 @@ def open_chart_window(parent: tk.Tk, theme: Dict[str, str], ticker: str,
         theme: Color theme dictionary
         ticker: Stock ticker symbol
         stock_name: Company name for display
-        period: Initial time period (1mo, 3mo, 6mo, 1y, 2y, 5y, max)
+        period: Initial time period (5d, 1mo, 3mo, 6mo, ytd, 1y, 2y, 5y, max)
     """
     try:
         chart_window = HistoricalChartWindow(parent, theme, ticker, stock_name, period)
@@ -488,9 +582,8 @@ def open_chart_window(parent: tk.Tk, theme: Dict[str, str], ticker: str,
 # Example usage for testing
 if __name__ == "__main__":
     root = tk.Tk()
-    root.withdraw()  # Hide main window
+    root.withdraw()
     
-    # Dark theme for testing
     theme = {
         "background": "#1e1e1e",
         "text": "#e0e0e0",
