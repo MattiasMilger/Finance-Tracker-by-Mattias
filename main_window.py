@@ -47,36 +47,39 @@ def log_and_show(title: str, message: str, func_name: str, ticker: Optional[str]
     getattr(messagebox, f"show{msg_type}")(title, message)
 
 
-def load_ticker_list(filename: str) -> Tuple[List[str], float, int, str]:
+def load_ticker_list(filename: str) -> Tuple[List[str], float, int, str, str]:
     """Load a list of ticker symbols from a JSON file."""
     if not os.path.exists(filename):
-        return [], 0.5, 30, "simple"
+        return [], 0.5, 30, "simple", "USD"
     try:
         with open(filename, "r", encoding="utf-8") as f:
             data = json.load(f)
         
         if isinstance(data, list):
-            return [str(t).strip().upper() for t in data if str(t).strip()], 0.5, 30, "simple"
+            return [str(t).strip().upper() for t in data if str(t).strip()], 0.5, 30, "simple", "USD"
         else:
             tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
             aggression = data.get("trading_aggression", 0.5)
             custom_period = data.get("custom_period_days", 30)
             rec_mode = data.get("recommendation_mode", "simple")
-            return tickers, aggression, custom_period, rec_mode
+            currency = data.get("display_currency", "USD")
+            return tickers, aggression, custom_period, rec_mode, currency
     except Exception as e:
         log_and_show("Load Error", f"Failed to load ticker list: {e}", "load_ticker_list", msg_type="warning")
-        return [], 0.5, 30, "simple"
+        return [], 0.5, 30, "simple", "USD"
 
 
 def save_ticker_list(filename: str, tickers: List[str], aggression: float = 0.5, 
-                     custom_period_days: int = 30, recommendation_mode: str = "simple") -> None:
+                     custom_period_days: int = 30, recommendation_mode: str = "simple",
+                     display_currency: str = "USD") -> None:
     """Save a list of ticker symbols to a JSON file."""
     try:
         data = {
             "tickers": tickers,
             "trading_aggression": aggression,
             "custom_period_days": custom_period_days,
-            "recommendation_mode": recommendation_mode
+            "recommendation_mode": recommendation_mode,
+            "display_currency": display_currency
         }
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -313,19 +316,19 @@ class StockTrackerApp:
                 value=style_name,
                 command=lambda v=aggr_value, n=style_name: self.set_trading_style(v, n)
             )
-        
-        trading_style_menu.add_separator()
-        rec_mode_menu = tk.Menu(trading_style_menu, tearoff=0)
-        trading_style_menu.add_cascade(label="Recommendation System", menu=rec_mode_menu)
+
+        # Recommendation System menu
+        rec_system_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Recommendation System", menu=rec_system_menu)
         
         self.rec_mode_var = tk.StringVar(value="simple")
-        rec_mode_menu.add_radiobutton(
+        rec_system_menu.add_radiobutton(
             label="Simple (Legacy)",
             variable=self.rec_mode_var,
             value="simple",
             command=lambda: self.set_recommendation_mode("simple")
         )
-        rec_mode_menu.add_radiobutton(
+        rec_system_menu.add_radiobutton(
             label="Complex (Multi-Factor Scoring)",
             variable=self.rec_mode_var,
             value="complex",
@@ -336,6 +339,92 @@ class StockTrackerApp:
         period_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Period", menu=period_menu)
         period_menu.add_command(label="Set Custom Period (Days)...", command=self.set_custom_period)
+
+        # Currency menu
+        currency_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Currency", menu=currency_menu)
+        
+        self.currency_var = tk.StringVar(value=CONFIG.display_currency)
+        
+        # Group currencies by continent
+        currency_menu.add_command(label="--- North America ---", state=tk.DISABLED)
+        north_america = [
+            ("US Dollar (USD)", "USD"),
+            ("Canadian Dollar (CAD)", "CAD"),
+            ("Mexican Peso (MXN)", "MXN"),
+        ]
+        for label, code in north_america:
+            currency_menu.add_radiobutton(
+                label=label,
+                variable=self.currency_var,
+                value=code,
+                command=lambda c=code: self.change_currency(c)
+            )
+        
+        currency_menu.add_separator()
+        currency_menu.add_command(label="--- Europe ---", state=tk.DISABLED)
+        europe = [
+            ("Euro (EUR)", "EUR"),
+            ("British Pound (GBP)", "GBP"),
+            ("Swedish Krona (SEK)", "SEK"),
+            ("Norwegian Krone (NOK)", "NOK"),
+            ("Danish Krone (DKK)", "DKK"),
+            ("Swiss Franc (CHF)", "CHF"),
+            ("Russian Ruble (RUB)", "RUB"),
+        ]
+        for label, code in europe:
+            currency_menu.add_radiobutton(
+                label=label,
+                variable=self.currency_var,
+                value=code,
+                command=lambda c=code: self.change_currency(c)
+            )
+        
+        currency_menu.add_separator()
+        currency_menu.add_command(label="--- Asia ---", state=tk.DISABLED)
+        asia = [
+            ("Japanese Yen (JPY)", "JPY"),
+            ("Chinese Yuan (CNY)", "CNY"),
+            ("Indian Rupee (INR)", "INR"),
+            ("South Korean Won (KRW)", "KRW"),
+            ("Hong Kong Dollar (HKD)", "HKD"),
+            ("Singapore Dollar (SGD)", "SGD"),
+        ]
+        for label, code in asia:
+            currency_menu.add_radiobutton(
+                label=label,
+                variable=self.currency_var,
+                value=code,
+                command=lambda c=code: self.change_currency(c)
+            )
+        
+        currency_menu.add_separator()
+        currency_menu.add_command(label="--- Oceania ---", state=tk.DISABLED)
+        oceania = [
+            ("Australian Dollar (AUD)", "AUD"),
+            ("New Zealand Dollar (NZD)", "NZD"),
+        ]
+        for label, code in oceania:
+            currency_menu.add_radiobutton(
+                label=label,
+                variable=self.currency_var,
+                value=code,
+                command=lambda c=code: self.change_currency(c)
+            )
+        
+        currency_menu.add_separator()
+        currency_menu.add_command(label="--- Other ---", state=tk.DISABLED)
+        other = [
+            ("Brazilian Real (BRL)", "BRL"),
+            ("South African Rand (ZAR)", "ZAR"),
+        ]
+        for label, code in other:
+            currency_menu.add_radiobutton(
+                label=label,
+                variable=self.currency_var,
+                value=code,
+                command=lambda c=code: self.change_currency(c)
+            )
 
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -440,7 +529,7 @@ class StockTrackerApp:
             "1 Day %", f"{CONFIG.custom_period_days} Day %",
             "Sector", "Industry", "Volume", "P/E", "Target %", "RSI", "MACD"
         ]
-        char_widths = [6, 10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
+        char_widths = [6, 10, 30, 18, 13, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         self.header_labels = []
         for i, (text, width) in enumerate(zip(headers, char_widths)):
@@ -500,6 +589,21 @@ class StockTrackerApp:
         else:
             self.status_lbl.config(text=f"Recommendation system set to {mode_display}")
 
+    def change_currency(self, currency: str) -> None:
+        """Change display currency and update all prices."""
+        from config import get_currency_symbol
+        
+        old_currency = CONFIG.display_currency
+        CONFIG.display_currency = currency
+        self.currency_var.set(currency)
+        
+        symbol = get_currency_symbol(currency)
+        self.status_lbl.config(text=f"Currency changed to {currency} ({symbol})")
+        
+        # If we have stock data, refresh the display with converted prices
+        if self.stock_data:
+            self._update_list_display()
+
     def set_trading_style(self, aggression: float, style_name: str) -> None:
         """Set trading style from menu and update recommendations."""
         self.trading_aggression = aggression
@@ -513,6 +617,48 @@ class StockTrackerApp:
         else:
             self.status_lbl.config(text=f"Trading style set to {style_name}")
 
+    def change_currency(self, currency: str) -> None:
+        """Change display currency and update all prices."""
+        from config import convert_currency, get_currency_symbol, format_price
+        
+        old_currency = CONFIG.display_currency
+        CONFIG.display_currency = currency
+        self.currency_var.set(currency)
+        
+        symbol = get_currency_symbol(currency)
+        self.status_lbl.config(text=f"Currency changed to {currency} ({symbol})")
+        
+        # If we have stock data, refresh the display with converted prices
+        if self.stock_data:
+            self._update_list_display()
+        
+    def _convert_price_for_display(self, price: float, stock_currency: str) -> float:
+        """Convert a price from stock currency to display currency."""
+        from config import convert_currency
+        
+        if price is None:
+            return None
+        
+        # Convert from stock's native currency to display currency
+        return convert_currency(price, stock_currency, CONFIG.display_currency)
+
+    def _get_formatted_price(self, price: float, stock_currency: str) -> str:
+        """Get formatted price string in display currency."""
+        from config import format_price
+        
+        if price is None:
+            return "N/A"
+        
+        converted = self._convert_price_for_display(price, stock_currency)
+        if converted is None:
+            return "N/A"
+        
+        return format_price(converted, CONFIG.display_currency)
+
+    def _get_aggression_label(self, aggression: float) -> str:
+        """Get descriptive label for aggression level."""
+        return get_aggression_label(aggression)
+    
     def _get_adjusted_thresholds(self) -> Dict[str, float]:
         """Calculate adjusted recommendation thresholds based on trading aggression."""
         aggr = self.trading_aggression
@@ -602,6 +748,25 @@ class StockTrackerApp:
                 return (priority_map.get(rec, 5), rec)
                 
             self.rows.sort(key=rec_key_func, reverse=self._sort_reverse)
+        elif self._sort_column == "Price":
+            # Special handling for price column with currency symbols
+            def price_key_func(row):
+                data = row["data"]
+                if not data or not data['info'].get('regularMarketPrice'):
+                    return (1, 0)  # Sort empty/error values to the end
+                
+                # Get the actual numeric price value
+                price = data['info'].get('regularMarketPrice')
+                stock_currency = data['info'].get('currency', 'USD')
+                
+                # Convert to display currency for consistent sorting
+                converted_price = self._convert_price_for_display(price, stock_currency)
+                if converted_price is None:
+                    return (1, 0)
+                
+                return (0, converted_price)
+            
+            self.rows.sort(key=price_key_func, reverse=self._sort_reverse)
         else:
             def key_func(row):
                 val = row["labels"][col_idx].cget("text")
@@ -657,7 +822,7 @@ class StockTrackerApp:
 
         display_data.sort(key=lambda x: x[2]) 
 
-        char_widths = [6, 10, 30, 18, 10, 10, 12, 22, 25, 12, 8, 10, 8, 10]
+        char_widths = [6, 10, 30, 18, 13, 10, 12, 22, 25, 12, 8, 10, 8, 10]
 
         for ticker, data, _ in display_data:
             bg_color = self.theme["tag_hold"]
@@ -679,12 +844,22 @@ class StockTrackerApp:
             if data and data['info'].get('volume'):
                 volume_str = format_volume(data['info'].get('volume'))
             
+            # Get stock's native currency
+            stock_currency = data['info'].get('currency', 'USD') if data else 'USD'
+            
+            # Convert prices to display currency
+            current_price = data['info'].get('regularMarketPrice') if data else None
+            if current_price is not None:
+                current_price_display = self._get_formatted_price(current_price, stock_currency)
+            else:
+                current_price_display = ""
+            
             values = [
                 "📊",
                 ticker,
                 data["name"] if data else "",
                 data["recommendation"] if data else "",
-                f"{data['info'].get('regularMarketPrice', ''):.2f}" if data and data['info'].get('regularMarketPrice') is not None else "",
+                current_price_display,
                 data.get("price_swing_1d", "N/A") if data else "N/A",
                 data.get("price_swing_1m", "N/A") if data else "N/A",
                 data["sector"] if data else "",
@@ -917,6 +1092,8 @@ class StockTrackerApp:
         self.current_list_name = ""
         self.trading_aggression = 0.5
         self.trading_style_var.set("Moderate")
+        CONFIG.display_currency = "USD"
+        self.currency_var.set("USD")
         self._update_list_display()
         self.list_name_lbl.config(text="(none)")
         self.unsaved_changes = False
@@ -927,7 +1104,7 @@ class StockTrackerApp:
             self.save_list_as()
             return
         save_ticker_list(self.current_list_name, self.current_tickers, self.trading_aggression, 
-                        CONFIG.custom_period_days, self.recommendation_mode)
+                        CONFIG.custom_period_days, self.recommendation_mode, CONFIG.display_currency)
         self.unsaved_changes = False
         messagebox.showinfo("Saved", f"List saved as '{os.path.basename(self.current_list_name)}'")
 
@@ -939,7 +1116,7 @@ class StockTrackerApp:
         )
         if fn:
             save_ticker_list(fn, self.current_tickers, self.trading_aggression, 
-                           CONFIG.custom_period_days, self.recommendation_mode)
+                           CONFIG.custom_period_days, self.recommendation_mode, CONFIG.display_currency)
             self.current_list_name = fn
             self.list_name_lbl.config(text=os.path.basename(fn))
             self.unsaved_changes = False
@@ -953,8 +1130,9 @@ class StockTrackerApp:
             filetypes=[("JSON files", "*.json")]
         )
         if fn:
-            self.current_tickers, self.trading_aggression, custom_period, rec_mode = load_ticker_list(fn)
+            self.current_tickers, self.trading_aggression, custom_period, rec_mode, currency = load_ticker_list(fn)
             CONFIG.custom_period_days = custom_period
+            CONFIG.display_currency = currency
             self.recommendation_mode = rec_mode
             
             self.header_labels[6].config(text=f"{custom_period} Day %")
@@ -962,6 +1140,7 @@ class StockTrackerApp:
             style_name = get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
             self.rec_mode_var.set(rec_mode)
+            self.currency_var.set(currency)
             self.current_list_name = fn
             self.stock_data.clear()
             self._update_list_display()
@@ -977,8 +1156,9 @@ class StockTrackerApp:
             name = f.read().strip()
         full = os.path.join(CONFIG.lists_dir, name)
         if os.path.exists(full):
-            self.current_tickers, self.trading_aggression, custom_period, rec_mode = load_ticker_list(full)
+            self.current_tickers, self.trading_aggression, custom_period, rec_mode, currency = load_ticker_list(full)
             CONFIG.custom_period_days = custom_period
+            CONFIG.display_currency = currency
             self.recommendation_mode = rec_mode
             
             self.header_labels[6].config(text=f"{custom_period} Day %")
@@ -986,6 +1166,7 @@ class StockTrackerApp:
             style_name = get_aggression_label(self.trading_aggression)
             self.trading_style_var.set(style_name)
             self.rec_mode_var.set(rec_mode)
+            self.currency_var.set(currency)
             self.current_list_name = full
             self.stock_data.clear()
             self._update_list_display()
@@ -1121,6 +1302,11 @@ class StockTrackerApp:
         info = data['info']
         metrics = data['metrics']
         
+        # Get stock's native currency and convert prices
+        stock_currency = info.get('currency', 'USD')
+        from config import get_currency_symbol
+        display_symbol = get_currency_symbol(CONFIG.display_currency)
+        
         detail_text = f"Ticker: {ticker}\n"
         detail_text += f"Name: {data['name']}\n"
         detail_text += f"Recommendation: {data['recommendation']}"
@@ -1130,18 +1316,33 @@ class StockTrackerApp:
         
         detail_text += f"\nReasons: {', '.join(data['reasons']) if data['reasons'] else 'None'}\n"
         detail_text += f"Sector/Industry: {data['sector']} / {data['industry']}\n"
-        detail_text += "--- Price & Performance ---\n"
-        detail_text += f"Current Price: {info.get('regularMarketPrice', 'N/A'):.2f}\n"
-        detail_text += f"Previous Close: {info.get('previousClose', 'N/A'):.2f}\n"
+        detail_text += f"--- Price & Performance (in {CONFIG.display_currency}) ---\n"
+        
+        current_price = info.get('regularMarketPrice')
+        if current_price:
+            detail_text += f"Current Price: {self._get_formatted_price(current_price, stock_currency)}\n"
+        
+        prev_close = info.get('previousClose')
+        if prev_close:
+            detail_text += f"Previous Close: {self._get_formatted_price(prev_close, stock_currency)}\n"
         
         volume = info.get('volume')
         if volume:
             vol_str = format_volume(volume)
             detail_text += f"Volume: {vol_str}\n"
         
-        detail_text += f"50-Day Avg: {info.get('fiftyDayAverage', 'N/A'):.2f}\n"
-        detail_text += f"52-Week High: {info.get('fiftyTwoWeekHigh', 'N/A'):.2f}\n"
-        detail_text += f"52-Week Low: {info.get('fiftyTwoWeekLow', 'N/A'):.2f}\n"
+        fifty_day_avg = info.get('fiftyDayAverage')
+        if fifty_day_avg:
+            detail_text += f"50-Day Avg: {self._get_formatted_price(fifty_day_avg, stock_currency)}\n"
+        
+        fifty_two_high = info.get('fiftyTwoWeekHigh')
+        if fifty_two_high:
+            detail_text += f"52-Week High: {self._get_formatted_price(fifty_two_high, stock_currency)}\n"
+        
+        fifty_two_low = info.get('fiftyTwoWeekLow')
+        if fifty_two_low:
+            detail_text += f"52-Week Low: {self._get_formatted_price(fifty_two_low, stock_currency)}\n"
+        
         detail_text += f"1 Day Swing: {data.get('price_swing_1d', 'N/A')}\n"
         detail_text += f"{CONFIG.custom_period_days} Day Swing: {data.get('price_swing_1m', 'N/A')}\n"
         detail_text += "--- Key Metrics ---\n"
