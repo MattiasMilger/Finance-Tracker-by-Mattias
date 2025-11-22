@@ -20,7 +20,7 @@ Open command line > pip install numpy pandas yfinance matplotlib
 
 Save the files provided in the following structure
 
-Root folder: Stock Tracker by Mattias.py, stock_search.py, stock_charts.py
+Root folder: Stock Tracker by Mattias.py, stock_search.py, stock_charts.py, config.py, main_window.py
 
 ----------------------------
 
