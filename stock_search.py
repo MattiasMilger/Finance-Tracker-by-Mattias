@@ -255,11 +255,6 @@ class StockSearchDialog:
         Uses the official yf.Search() class to find stock quotes by name/ticker.
         Populates the Treeview with results.
         """
-        self.results_text.config(state=tk.NORMAL)
-        self.results_text.insert(tk.END, f"Searching using yf.Search() for: {company_name}...\n")
-        self.results_text.config(state=tk.DISABLED)
-        self.dialog.update_idletasks()
-        
         # Clear old results
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
@@ -267,14 +262,18 @@ class StockSearchDialog:
         self.search_results.clear()
         
         try:
-            # Use the official yfinance Search class (reliable in recent versions like 0.2.65)
+            # Use the official yfinance Search class
             search_obj = yf.Search(company_name, max_results=10)
             
             # The .quotes attribute is a list of dictionaries with search results
             quotes = search_obj.quotes
             
             if not quotes:
-                self._display_error(f"No stocks found matching '{company_name}'.")
+                self._display_message(f"No stocks found matching '{company_name}'.\n\n"
+                                    "Try:\n"
+                                    "  • A different search term\n"
+                                    "  • The exact ticker symbol\n"
+                                    "  • Including the exchange suffix (e.g., NVDA.ST)")
                 return
 
             for result in quotes:
@@ -293,7 +292,8 @@ class StockSearchDialog:
                         self.results_tree.insert("", tk.END, values=(ticker, name, exchange))
             
             if not self.search_results:
-                self._display_error(f"No stock quotes found for '{company_name}'.")
+                self._display_message(f"No stock quotes found for '{company_name}'.\n\n"
+                                    "Tip: Try searching for the ticker symbol directly.")
                 return
             
             # Show the list of results
@@ -304,19 +304,18 @@ class StockSearchDialog:
             self.results_text.insert(tk.END, "Multiple results found. Click to select a stock, then press 'Add to Tracker' or double-click to view details.\n")
             self.results_text.config(state=tk.DISABLED)
             
-            # Auto-select and display if only one perfect match is found (optional enhancement)
+            # Auto-select and display if only one perfect match is found
             if len(self.search_results) == 1:
                 ticker = self.search_results[0]['ticker']
                 self.results_list_frame.pack_forget()
                 self.detail_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-                self.results_text.config(state=tk.NORMAL)
-                self.results_text.delete(1.0, tk.END)
-                self.results_text.insert(tk.END, f"Best match found: {self.search_results[0]['name']} ({ticker}). Fetching details...\n")
-                self.results_text.config(state=tk.DISABLED)
+                self._display_searching_message(f"Best match found: {self.search_results[0]['name']} ({ticker}). Fetching details...")
                 self._fetch_and_display_details(ticker)
 
         except Exception as e:
-            self._display_error(f"Search API failed for '{company_name}': {str(e)}")
+            self._display_message(f"Search failed for '{company_name}'.\n\n"
+                                f"Error: {str(e)}\n\n"
+                                "Please try again or search for a different stock.")
 
     def search_stock(self) -> None:
         """Search for stock information by ticker or company name."""
@@ -327,10 +326,6 @@ class StockSearchDialog:
             return
         
         # --- UI State Reset ---
-        self.results_text.config(state=tk.NORMAL)
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, f"Searching for '{query}'...\n")
-        self.results_text.config(state=tk.DISABLED)
         self.add_button.config(state=tk.DISABLED)
         self.chart_button.config(state=tk.DISABLED)
         self.current_stock_data = None
@@ -339,32 +334,45 @@ class StockSearchDialog:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
             
-        self.results_list_frame.pack_forget() # Hide list by default
-        self.detail_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10)) # Show detail view by default
+        self.results_list_frame.pack_forget()
+        self.detail_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        # Show searching message
+        self._display_searching_message(f"Searching for '{query}'...")
         self.dialog.update_idletasks()
         
         # --- Determine Search Type ---
         query_upper = query.upper()
-        # Heuristic: if it's short (<= 10 chars) and alphanumeric/symbolic, assume it might be a direct ticker
         is_likely_ticker = len(query) <= 10 and (query.replace('.', '').replace('-', '').isalnum() or '.' in query or '-' in query)
         
         if is_likely_ticker:
-            # 1. Try direct ticker fetch
-            self.results_text.config(state=tk.NORMAL)
-            self.results_text.insert(tk.END, f"Attempting direct fetch for ticker: {query_upper}...\n")
-            self.results_text.config(state=tk.DISABLED)
+            # Try direct ticker fetch first
             self._fetch_and_display_details(query_upper)
             
             if self.current_stock_data is None:
-                # 2. If direct fetch fails, fall back to yf.Search() for broader lookup (e.g., user typed "TSL" for "TSLA")
-                self.results_text.config(state=tk.NORMAL)
-                self.results_text.insert(tk.END, f"Direct fetch failed. Falling back to company name search for: {query}...\n")
-                self.results_text.config(state=tk.DISABLED)
+                # If direct fetch fails, fall back to yf.Search()
+                self._display_searching_message(f"Searching database for: {query}...")
+                self.dialog.update_idletasks()
                 self._search_by_name(query)
-
         else:
             # Input is clearly a company name, use yf.Search() immediately
             self._search_by_name(query)
+    
+    def _display_searching_message(self, message: str) -> None:
+        """Display a searching/loading message."""
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, f"🔍 {message}\n\nPlease wait...")
+        self.results_text.config(state=tk.DISABLED)
+    
+    def _display_message(self, message: str) -> None:
+        """Display an informational message (not an error popup)."""
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, message)
+        self.results_text.config(state=tk.DISABLED)
+        self.current_stock_data = None
+        self.chart_button.config(state=tk.DISABLED)
     
     def _fetch_and_display_details(self, ticker: str) -> None:
         """Fetch and display detailed information for a specific ticker."""
@@ -375,7 +383,14 @@ class StockSearchDialog:
             
             # Validate stock exists
             if not info.get('regularMarketPrice') and not info.get('currentPrice'):
-                self._display_error(f"Stock '{ticker}' not found or has no price data.")
+                self._display_message(f"Stock '{ticker}' not found or has no price data.\n\n"
+                                    "Please check:\n"
+                                    "  • The ticker symbol is correct\n"
+                                    "  • Include exchange suffix if needed (e.g., .ST for Stockholm)\n\n"
+                                    "Examples:\n"
+                                    "  US stocks: AAPL, MSFT, GOOGL\n"
+                                    "  Swedish stocks: ERIC-B.ST, VOLV-B.ST\n"
+                                    "  UK stocks: BP.L, HSBA.L")
                 return
             
             # Get price data
@@ -405,7 +420,9 @@ class StockSearchDialog:
             self.chart_button.config(state=tk.NORMAL)
             
         except Exception as e:
-            self._display_error(f"Error fetching data for '{ticker}': {str(e)}")
+            self._display_message(f"Error fetching data for '{ticker}'.\n\n"
+                                f"Error: {str(e)}\n\n"
+                                "Please verify the ticker symbol and try again.")
     
     def _display_results(self, ticker: str, info: dict, price: float, 
                          daily_change: str, daily_change_pct: str) -> None:
@@ -483,21 +500,6 @@ class StockSearchDialog:
         
         self.results_text.insert(tk.END, result)
         self.results_text.config(state=tk.DISABLED)
-    
-    def _display_error(self, message: str) -> None:
-        """Display error message in results."""
-        self.results_text.config(state=tk.NORMAL)
-        self.results_text.delete(1.0, tk.END)
-        self.results_text.insert(tk.END, f"❌ {message}\n\n")
-        self.results_text.insert(tk.END, "Please check the ticker symbol and try again.\n")
-        self.results_text.insert(tk.END, "Make sure to include the correct exchange suffix if needed.\n")
-        self.results_text.insert(tk.END, "\nExamples:\n")
-        self.results_text.insert(tk.END, "  - US stocks: AAPL, MSFT, GOOGL\n")
-        self.results_text.insert(tk.END, "  - Swedish stocks: ERIC-B.ST, VOLV-B.ST\n")
-        self.results_text.insert(tk.END, "  - UK stocks: BP.L, HSBA.L\n")
-        self.results_text.config(state=tk.DISABLED)
-        self.current_stock_data = None
-        self.chart_button.config(state=tk.DISABLED)
     
     def view_chart(self) -> None:
         """Open chart window for the selected stock."""
